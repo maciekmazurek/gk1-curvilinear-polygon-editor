@@ -39,25 +39,16 @@
       <item>
        <widget class="QRadioButton" name="radioButton">
         <property name="text">
-         <string>QPainter's drawLine algorithm</string>
+         <string>QGraphicsLineItem's algorithm</string>
         </property>
        </widget>
       </item>
      </layout>
     </item>
     <item>
-     <widget class="QLabel" name="label">
-      <property name="enabled">
-       <bool>true</bool>
-      </property>
-      <property name="sizePolicy">
-       <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-        <horstretch>0</horstretch>
-        <verstretch>0</verstretch>
-       </sizepolicy>
-      </property>
-      <property name="text">
-       <string/>
+     <widget class="QGraphicsView" name="graphicsView">
+      <property name="renderHints">
+       <set>QPainter::RenderHint::Antialiasing|QPainter::RenderHint::TextAntialiasing</set>
       </property>
      </widget>
     </item>

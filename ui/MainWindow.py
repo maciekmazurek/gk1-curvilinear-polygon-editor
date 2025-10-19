@@ -15,7 +15,7 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
     QFont, QFontDatabase, QGradient, QIcon,
     QImage, QKeySequence, QLinearGradient, QPainter,
     QPalette, QPixmap, QRadialGradient, QTransform)
-from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QMainWindow,
+from PySide6.QtWidgets import (QApplication, QGraphicsView, QHBoxLayout, QMainWindow,
     QMenuBar, QRadioButton, QSizePolicy, QStatusBar,
     QVBoxLayout, QWidget)
 
@@ -45,16 +45,11 @@ class Ui_MainWindow(object):
 
         self.verticalLayout.addLayout(self.horizontalLayout)
 
-        self.label = QLabel(self.centralwidget)
-        self.label.setObjectName(u"label")
-        self.label.setEnabled(True)
-        sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        sizePolicy.setHorizontalStretch(0)
-        sizePolicy.setVerticalStretch(0)
-        sizePolicy.setHeightForWidth(self.label.sizePolicy().hasHeightForWidth())
-        self.label.setSizePolicy(sizePolicy)
+        self.graphicsView = QGraphicsView(self.centralwidget)
+        self.graphicsView.setObjectName(u"graphicsView")
+        self.graphicsView.setRenderHints(QPainter.RenderHint.Antialiasing|QPainter.RenderHint.TextAntialiasing)
 
-        self.verticalLayout.addWidget(self.label)
+        self.verticalLayout.addWidget(self.graphicsView)
 
         MainWindow.setCentralWidget(self.centralwidget)
         self.menubar = QMenuBar(MainWindow)
@@ -73,7 +68,6 @@ class Ui_MainWindow(object):
     def retranslateUi(self, MainWindow):
         MainWindow.setWindowTitle(QCoreApplication.translate("MainWindow", u"polygon-editor", None))
         self.radioButton_2.setText(QCoreApplication.translate("MainWindow", u"Bresenham's algorithm", None))
-        self.radioButton.setText(QCoreApplication.translate("MainWindow", u"QPainter's drawLine algorithm", None))
-        self.label.setText("")
+        self.radioButton.setText(QCoreApplication.translate("MainWindow", u"QGraphicsLineItem's algorithm", None))
     # retranslateUi
 
