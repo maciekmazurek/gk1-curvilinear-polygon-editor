@@ -1,7 +1,5 @@
 from PySide6.QtWidgets import QApplication, QMainWindow, QGraphicsScene
-from PySide6.QtGui import QPainter
 from ui.MainWindow import Ui_MainWindow
-from model import Polygon
 from polygon_renderer import PolygonRenderer
 
 import sys
@@ -17,10 +15,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         rect = self.graphicsView.rect()
         self.scene.setSceneRect(0, 0, rect.width(), rect.height())
 
-        # Creating and rendering initial polygon
+        # Rendering predefined polygon
         self.renderer = PolygonRenderer(self.scene)
-        polygon = Polygon()
-        self.renderer.render(polygon)
+        self.renderer.render()
 
 
 if __name__ == "__main__":
