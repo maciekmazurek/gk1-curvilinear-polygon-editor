@@ -5,7 +5,15 @@ from PySide6.QtWidgets import (
     QGraphicsItem, 
     QGraphicsLineItem,
 )
-from PySide6.QtGui import QBrush, QColor, QPainterPath, QPen
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QPainterPath,
+    QPen,
+    QImage,
+    QPixmap,
+    QPainter
+)
 from PySide6.QtCore import QPointF, QRectF, Qt
 from model.model import LineDrawingMode, EdgeType
 
@@ -72,7 +80,10 @@ class StandardLineEdgeItem(EdgeItem):
 class BresenhamLineEdgeItem(EdgeItem):
     def __init__(self, edge: Edge, parent):
         super().__init__(edge, parent)
-        self._pixels = []
+        self._line_pixels = []
+        self._pixmap = None
+        self._pixmap_offset = QPointF(0, 0)
+        self._cached_bounding_rect = QRectF(0, 0, 0, 0)
 
     def _calculate_bresenham(self, x0: int, y0: int, x1: int, y1: int):
         pixels = []
@@ -98,32 +109,68 @@ class BresenhamLineEdgeItem(EdgeItem):
                 y += ystep
                 err += dx
         return pixels
-    
+
     def boundingRect(self):
-        p1, p2 = self.convert_coords_to_parent()
-        minx = min(p1.x(), p2.x()) - 1
-        miny = min(p1.y(), p2.y()) - 1
-        maxx = max(p1.x(), p2.x()) + 1
-        maxy = max(p1.y(), p2.y()) + 1
-        return QRectF(minx, miny, maxx - minx, maxy - miny)
+        return self._cached_bounding_rect
 
     def update_edge(self):
         self.prepareGeometryChange()
+
         p1, p2 = self.convert_coords_to_parent()
-        self._pixels = self._calculate_bresenham(int(round(p1.x())), 
-                                                 int(round(p1.y())), 
-                                                 int(round(p2.x())), 
-                                                 int(round(p2.y())))
+        x0 = int(round(p1.x()))
+        y0 = int(round(p1.y()))
+        x1 = int(round(p2.x()))
+        y1 = int(round(p2.y()))
+
+        # Integer bounding box in parent coordinates
+        minx = min(x0, x1) - 1
+        miny = min(y0, y1) - 1
+        maxx = max(x0, x1) + 1
+        maxy = max(y0, y1) + 1
+
+        width = maxx - minx + 1
+        height = maxy - miny + 1
+
+        # If degenerate, clear cache
+        if width <= 0 or height <= 0:
+            self._pixmap = None
+            self._cached_bounding_rect = QRectF(0, 0, 0, 0)
+            return
+
+        # Calculate pixel coordinates relative to image (offset by minx/miny)
+        rel_x0 = x0 - minx
+        rel_y0 = y0 - miny
+        rel_x1 = x1 - minx
+        rel_y1 = y1 - miny
+
+        self._line_pixels = self._calculate_bresenham(rel_x0, rel_y0, rel_x1, rel_y1)
+
+        img = QImage(width, height, QImage.Format_ARGB32_Premultiplied)
+        img.fill(0)  # We make sure its transparent
+
+        # Creating painter object on our image
+        qp = QPainter(img)
+        try:
+            qp.setPen(Qt.NoPen)
+            qp.setBrush(QBrush(QColor("black")))
+            # Drawing pixels into image with boundaries checking
+            for px, py in self._line_pixels:
+                if 0 <= px < width and 0 <= py < height:
+                    qp.drawRect(px, py, 1, 1)
+        finally:
+            qp.end()
+
+        # Converting image to pixmap and updating bounding rectangle
+        self._pixmap = QPixmap.fromImage(img)
+        self._pixmap_offset = QPointF(minx, miny)
+        self._cached_bounding_rect = QRectF(minx, miny, width, height)
 
     def paint(self, painter, option, widget):
-        if self._pixels:
+        if self._pixmap:
+            # Draw pixmap at precomputed offset (in parent local coordinates)
+            painter.drawPixmap(self._pixmap_offset, self._pixmap)
             # Uncomment the following line to show that functionality is working
-            print(f"[DEBUG] Painting Bresenham line with {len(self._pixels)} pixels")
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QBrush(QColor("black")))
-            # We draw 1x1 rectangles (pixels) to represent the line
-            for x, y in self._pixels:
-                painter.drawRect(x, y, 1, 1)
+            print(f"[DEBUG] Painting Bresenham line with {len(self._line_pixels)} pixels")
     
 class PolygonItem(QGraphicsItem):
     def __init__(self, polygon: Polygon):
