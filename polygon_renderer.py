@@ -6,7 +6,7 @@ class PolygonRenderer:
     def __init__(self, scene: QGraphicsScene):
         self.scene = scene
 
-    def render(self) -> None:
+    def render(self) -> PolygonItem:
         self.scene.clear()
         polygon = Polygon()
         polygon_item = PolygonItem(polygon)
@@ -15,3 +15,4 @@ class PolygonRenderer:
         # relative to the scene
         polygon_item.setPos(0, 0)
         self.scene.addItem(polygon_item)
+        return polygon_item

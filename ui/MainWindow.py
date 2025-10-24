@@ -32,15 +32,15 @@ class Ui_MainWindow(object):
         self.verticalLayout.setObjectName(u"verticalLayout")
         self.horizontalLayout = QHBoxLayout()
         self.horizontalLayout.setObjectName(u"horizontalLayout")
-        self.radioButton_2 = QRadioButton(self.centralwidget)
-        self.radioButton_2.setObjectName(u"radioButton_2")
+        self.radioButton_QGraphics = QRadioButton(self.centralwidget)
+        self.radioButton_QGraphics.setObjectName(u"radioButton_QGraphics")
 
-        self.horizontalLayout.addWidget(self.radioButton_2)
+        self.horizontalLayout.addWidget(self.radioButton_QGraphics)
 
-        self.radioButton = QRadioButton(self.centralwidget)
-        self.radioButton.setObjectName(u"radioButton")
+        self.radioButton_Bresenham = QRadioButton(self.centralwidget)
+        self.radioButton_Bresenham.setObjectName(u"radioButton_Bresenham")
 
-        self.horizontalLayout.addWidget(self.radioButton)
+        self.horizontalLayout.addWidget(self.radioButton_Bresenham)
 
 
         self.verticalLayout.addLayout(self.horizontalLayout)
@@ -67,7 +67,7 @@ class Ui_MainWindow(object):
 
     def retranslateUi(self, MainWindow):
         MainWindow.setWindowTitle(QCoreApplication.translate("MainWindow", u"polygon-editor", None))
-        self.radioButton_2.setText(QCoreApplication.translate("MainWindow", u"Bresenham's algorithm", None))
-        self.radioButton.setText(QCoreApplication.translate("MainWindow", u"QGraphicsLineItem's algorithm", None))
+        self.radioButton_QGraphics.setText(QCoreApplication.translate("MainWindow", u"QGraphics library algorithm", None))
+        self.radioButton_Bresenham.setText(QCoreApplication.translate("MainWindow", u"Bresenham's algorithm", None))
     # retranslateUi
 

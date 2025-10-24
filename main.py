@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import QApplication, QMainWindow, QGraphicsScene
 from ui.MainWindow import Ui_MainWindow
 from polygon_renderer import PolygonRenderer
+from model.model import LineDrawingMode
 
 import sys
 
@@ -17,7 +18,17 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         # Rendering predefined polygon
         self.renderer = PolygonRenderer(self.scene)
-        self.renderer.render()
+        self.polygon_item = self.renderer.render()
+
+        # Connecting radio buttons
+        self.radioButton_Bresenham.toggled.connect(lambda checked: self._on_radio_toggled(checked, LineDrawingMode.BRESENHAM))
+        self.radioButton_QGraphics.toggled.connect(lambda checked: self._on_radio_toggled(checked, LineDrawingMode.QGRAPHICS))
+        # By default we draw with QGraphics library algorithm
+        self.radioButton_QGraphics.setChecked(True)
+
+    def _on_radio_toggled(self, checked: bool, mode: LineDrawingMode):
+        if checked and self.polygon_item:
+            self.polygon_item.redraw_with_new_mode(mode)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QBrush, QColor, QPainterPath, QPen
 from PySide6.QtCore import QPointF, QRectF, Qt
-
+from model.model import LineDrawingMode, EdgeType
 
 class VertexItem(QGraphicsEllipseItem):
     def __init__(self, vertex : Vertex, parent=None):
@@ -35,22 +35,96 @@ class VertexItem(QGraphicsEllipseItem):
         return super().itemChange(change, value)
     
 class EdgeItem(QGraphicsLineItem):
+    # Default line drawing mode
+    line_drawing_mode = LineDrawingMode.QGRAPHICS
+
     def __init__(self, edge: Edge, parent):
         super().__init__(parent)
         self.edge = edge
         # Setting Z value to be below vertices
         self.setZValue(1.0)
 
-    def update_edge(self):
-        # We convert vertex positions from scene coordinates to parent 
-        # (PolygonItem) coordinates
+    def convert_coords_to_parent(self):
         p1 = self.parentItem().mapFromScene(QPointF(self.edge.v1.x, 
                                                     self.edge.v1.y))
         p2 = self.parentItem().mapFromScene(QPointF(self.edge.v2.x, 
                                                     self.edge.v2.y))
-        # Updating the edge position relative to the parent coordinates
+        return (p1, p2)
+
+    def Factory(edge: Edge, parent):
+        if edge.type == EdgeType.LINE:
+            if EdgeItem.line_drawing_mode == LineDrawingMode.QGRAPHICS:
+                return StandardLineEdgeItem(edge, parent)
+            elif EdgeItem.line_drawing_mode == LineDrawingMode.BRESENHAM:
+                return BresenhamLineEdgeItem(edge, parent)
+        # Other edge types (BEZIER, ARC) will be handled here in the future
+
+# Rysowany za pomocą interfejsu udostępnianego przez QGraphics
+class StandardLineEdgeItem(EdgeItem):
+    def __init__(self, edge: Edge, parent):
+        super().__init__(edge, parent)
+
+    def update_edge(self):
+        p1, p2 = self.convert_coords_to_parent()
         self.setLine(p1.x(), p1.y(), p2.x(), p2.y())
 
+# Rysowany za pomocą własnej implementacji algorytmu Bresenhama
+class BresenhamLineEdgeItem(EdgeItem):
+    def __init__(self, edge: Edge, parent):
+        super().__init__(edge, parent)
+        self._pixels = []
+
+    def _calculate_bresenham(self, x0: int, y0: int, x1: int, y1: int):
+        pixels = []
+        steep = abs(y1 - y0) > abs(x1 - x0)
+        if steep:
+            x0, y0 = y0, x0
+            x1, y1 = y1, x1
+        if x0 > x1:
+            x0, x1 = x1, x0
+            y0, y1 = y1, y0
+        dx = x1 - x0
+        dy = abs(y1 - y0)
+        err = dx // 2
+        ystep = 1 if y0 < y1 else -1
+        y = y0
+        for x in range(x0, x1 + 1):
+            if steep:
+                pixels.append((y, x))
+            else:
+                pixels.append((x, y))
+            err -= dy
+            if err < 0:
+                y += ystep
+                err += dx
+        return pixels
+    
+    def boundingRect(self):
+        p1, p2 = self.convert_coords_to_parent()
+        minx = min(p1.x(), p2.x()) - 1
+        miny = min(p1.y(), p2.y()) - 1
+        maxx = max(p1.x(), p2.x()) + 1
+        maxy = max(p1.y(), p2.y()) + 1
+        return QRectF(minx, miny, maxx - minx, maxy - miny)
+
+    def update_edge(self):
+        self.prepareGeometryChange()
+        p1, p2 = self.convert_coords_to_parent()
+        self._pixels = self._calculate_bresenham(int(round(p1.x())), 
+                                                 int(round(p1.y())), 
+                                                 int(round(p2.x())), 
+                                                 int(round(p2.y())))
+
+    def paint(self, painter, option, widget):
+        if self._pixels:
+            # Uncomment the following line to show that functionality is working
+            print(f"[DEBUG] Painting Bresenham line with {len(self._pixels)} pixels")
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor("black")))
+            # We draw 1x1 rectangles (pixels) to represent the line
+            for x, y in self._pixels:
+                painter.drawRect(x, y, 1, 1)
+    
 class PolygonItem(QGraphicsItem):
     def __init__(self, polygon: Polygon):
         super().__init__()
@@ -60,8 +134,8 @@ class PolygonItem(QGraphicsItem):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setAcceptHoverEvents(True)
 
-        # Flag indicating whether the position of vertices is updated by the 
-        # parent object
+        # Flag indicating whether the position of vertices is being currently 
+        # updated by the parent (this class)
         self.updating_from_parent = False
 
         # Properties used for implementing polygon dragging
@@ -125,9 +199,9 @@ class PolygonItem(QGraphicsItem):
 
         # Setting up edges
         for e in self.polygon.edges:
-            e_item = EdgeItem(e, parent=self)
-            e_item.update_edge()
+            e_item = EdgeItem.Factory(e, parent=self)
             self.edge_items.append(e_item)
+            e_item.update_edge()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -185,5 +259,27 @@ class PolygonItem(QGraphicsItem):
         for e_item in self.edge_items:
             if e_item.edge.v1 is vertex or e_item.edge.v2 is vertex:
                 e_item.update_edge()
+
+        self.update()
+    
+    # Method called by MainWindow when line drawing mode is changed
+    def redraw_with_new_mode(self, mode: LineDrawingMode):
+        # Update line drawing mode
+        EdgeItem.line_drawing_mode = mode
+
+        # Remove old edge items
+        for e_item in self.edge_items:
+            e_item.setParentItem(None)
+            scene = self.scene()
+            if scene:
+                scene.removeItem(e_item)
+        self.edge_items.clear()
+
+        # Create new edge items according to new drawing mode
+        for e in self.polygon.edges:
+            e_item = EdgeItem.Factory(e, parent=self)
+            self.edge_items.append(e_item)
+            # Redrawing
+            e_item.update_edge()
 
         self.update()

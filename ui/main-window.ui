@@ -30,16 +30,16 @@
     <item>
      <layout class="QHBoxLayout" name="horizontalLayout">
       <item>
-       <widget class="QRadioButton" name="radioButton_2">
+       <widget class="QRadioButton" name="radioButton_QGraphics">
         <property name="text">
-         <string>Bresenham's algorithm</string>
+         <string>QGraphics library algorithm</string>
         </property>
        </widget>
       </item>
       <item>
-       <widget class="QRadioButton" name="radioButton">
+       <widget class="QRadioButton" name="radioButton_Bresenham">
         <property name="text">
-         <string>QGraphicsLineItem's algorithm</string>
+         <string>Bresenham's algorithm</string>
         </property>
        </widget>
       </item>
