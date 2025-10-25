@@ -1,3 +1,4 @@
+import algorithms
 from model.model import Bezier, Vertex, Edge, Polygon
 from config import *
 from PySide6.QtWidgets import (
@@ -17,6 +18,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from model.model import LineDrawingMode, EdgeType
 
 import math
+import algorithms
 
 class VertexItem(QGraphicsEllipseItem):
     def __init__(self, vertex : Vertex, parent=None):
@@ -129,31 +131,6 @@ class BresenhamLineEdgeItem(LineEdgeItem):
         self._pixmap = None
         self._pixmap_offset = QPointF(0, 0)
 
-    def _calculate_bresenham(self, x0: int, y0: int, x1: int, y1: int):
-        pixels = []
-        steep = abs(y1 - y0) > abs(x1 - x0)
-        if steep:
-            x0, y0 = y0, x0
-            x1, y1 = y1, x1
-        if x0 > x1:
-            x0, x1 = x1, x0
-            y0, y1 = y1, y0
-        dx = x1 - x0
-        dy = abs(y1 - y0)
-        err = dx // 2
-        ystep = 1 if y0 < y1 else -1
-        y = y0
-        for x in range(x0, x1 + 1):
-            if steep:
-                pixels.append((y, x))
-            else:
-                pixels.append((x, y))
-            err -= dy
-            if err < 0:
-                y += ystep
-                err += dx
-        return pixels
-
     def boundingRect(self):
         return self._cached_bounding
 
@@ -187,7 +164,7 @@ class BresenhamLineEdgeItem(LineEdgeItem):
         rel_x1 = x1 - minx
         rel_y1 = y1 - miny
 
-        self._pixels = self._calculate_bresenham(rel_x0, rel_y0, rel_x1, rel_y1)
+        self._pixels = algorithms.bresenham(rel_x0, rel_y0, rel_x1, rel_y1)
 
         img = QImage(width, height, QImage.Format_ARGB32_Premultiplied)
         img.fill(0)  # We make sure its transparent
@@ -221,7 +198,8 @@ class BezierEdgeItem(EdgeItem):
         if edge.type != EdgeType.BEZIER:
             pass # Should implement raising an error
         super().__init__(edge, parent)
-        self._pixmap = None      # optional pixel cache for pixel mode
+        self._pixels = []
+        self._pixmap = None
         self._pixmap_offset = QPointF(0, 0)
 
         # path cache used only for shape() / hit-testing (kept up-to-date)
@@ -252,9 +230,6 @@ class BezierEdgeItem(EdgeItem):
         # update caches / redraw
         self.update_edge()
         self.update()
-
-    def _distance(self, p1: QPointF, p2: QPointF) -> float:
-        return math.hypot(p2.x() - p1.x(), p2.y() - p1.y())
     
     def update_edge(self):
         # Convert control points to local (parent) coordinates for rasterization
@@ -271,60 +246,10 @@ class BezierEdgeItem(EdgeItem):
         control_path.lineTo(p3)
         control_rect = control_path.boundingRect().adjusted(-2, -2, 2, 2)
 
-        # Estimate sampling density from control polygon length
-        est_len = (self._distance(p0, p1) + self._distance(p1, p2) + self._distance(p2, p3))
-        n = max(int(est_len * 1.5), 32)
-        n = min(n, 2000)
-        dt = 1.0 / n
-
-        # Power basis coefficients (local coords)
-        x0, y0 = p0.x(), p0.y()
-        x1, y1 = p1.x(), p1.y()
-        x2, y2 = p2.x(), p2.y()
-        x3, y3 = p3.x(), p3.y()
-
-        ax = -x0 + 3*x1 - 3*x2 + x3
-        ay = -y0 + 3*y1 - 3*y2 + y3
-        bx = 3*x0 - 6*x1 + 3*x2
-        by = 3*y0 - 6*y1 + 3*y2
-        cx = -3*x0 + 3*x1
-        cy = -3*y0 + 3*y1
-        dx = x0
-        dy = y0
-
-        dt2 = dt * dt
-        dt3 = dt2 * dt
-
-        sx = dx
-        sy = dy
-
-        s1x = cx * dt + bx * dt2 + ax * dt3
-        s1y = cy * dt + by * dt2 + ay * dt3
-
-        s2x = 2 * bx * dt2 + 6 * ax * dt3
-        s2y = 2 * by * dt2 + 6 * ay * dt3
-
-        s3x = 6 * ax * dt3
-        s3y = 6 * ay * dt3
-
-        # Collect integer pixel coordinates (absolute in parent local coords)
-        pixels = []
-        last_px = None
-        for i in range(n + 1):
-            px = int(round(sx))
-            py = int(round(sy))
-            if last_px != (px, py):
-                pixels.append((px, py))
-                last_px = (px, py)
-            sx += s1x
-            sy += s1y
-            s1x += s2x
-            s1y += s2y
-            s2x += s3x
-            s2y += s3y
+        self._pixels = algorithms.bezier(p0, p1, p2, p3)
 
         # If no pixels, still need to update path cache and bounding (control polygon)
-        if not pixels:
+        if not self._pixels:
             new_bounding = control_rect
             self.prepareGeometryChange()
             self._pixmap = None
@@ -335,8 +260,8 @@ class BezierEdgeItem(EdgeItem):
             return
 
         # compute integer bounding box for pixels
-        xs = [p[0] for p in pixels]
-        ys = [p[1] for p in pixels]
+        xs = [p[0] for p in self._pixels]
+        ys = [p[1] for p in self._pixels]
         minx = min(xs) - 1
         miny = min(ys) - 1
         maxx = max(xs) + 1
@@ -350,6 +275,7 @@ class BezierEdgeItem(EdgeItem):
             # don't rasterize, but still include control polygon in bounding
             new_bounding = control_rect.united(QRectF(minx, miny, max(0, width), max(0, height)))
             self.prepareGeometryChange()
+            self._pixels = []
             self._pixmap = None
             self._cached_bounding = new_bounding
             self._path_cache = control_path
@@ -371,7 +297,7 @@ class BezierEdgeItem(EdgeItem):
         try:
             qp.setPen(Qt.NoPen)
             qp.setBrush(QBrush(QColor("black")))
-            for px, py in pixels:
+            for px, py in self._pixels:
                 rx = px - minx
                 ry = py - miny
                 if 0 <= rx < width and 0 <= ry < height:
