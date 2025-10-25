@@ -44,6 +44,21 @@ class VertexItem(QGraphicsEllipseItem):
                 vertex_new_scene_coords = parent.mapToScene(value)
                 parent.on_vertex_moved(self.vertex, vertex_new_scene_coords)
         return super().itemChange(change, value)
+
+    def contextMenuEvent(self, event):
+        menu = QMenu()
+        del_action = menu.addAction("Delete vertex")
+        sp = event.screenPos()
+        try:
+            qp = sp.toPoint()
+        except Exception:
+            qp = sp
+        chosen_action = menu.exec(qp)
+        if chosen_action == del_action:
+            parent = self.parentItem()
+            if parent:
+                parent.delete_vertex(self.vertex)
+        event.accept()
     
 class ControlPointItem(QGraphicsEllipseItem):
     def __init__(self, vertex: Vertex, parent=None, color="orange"):
@@ -93,7 +108,7 @@ class LineEdgeItem(EdgeItem):
         self._cached_bounding = QRectF(0, 0, 0, 0)
         self._p1 = QPointF()
         self._p2 = QPointF()
-        # make this item accept context menu events and right-clicks
+
         self.setAcceptHoverEvents(True)
         self.setAcceptedMouseButtons(Qt.LeftButton | Qt.RightButton)
 
@@ -626,7 +641,42 @@ class PolygonItem(QGraphicsItem):
         self.polygon.edges[old_edge_index] = new_edge1
         self.polygon.edges.insert(old_edge_index + 1, new_edge2)
 
+        # Rebuild view based on the new model
         self._rebuild_childitems()
+
+    # Method called by VertexItem when user wants to delete it
+    def delete_vertex(self, vertex: Vertex):
+        n = len(self.polygon.vertices)
+
+        # We require at least 3 to keep the polygon structure
+        if n > 3:
+            del_vertex_index = self.polygon.vertices.index(vertex)
+            prev_vertex_index = (del_vertex_index - 1) % n
+            next_vertex_index = (del_vertex_index + 1) % n
+
+            prev_vertex = self.polygon.vertices[prev_vertex_index]
+            next_vertex = self.polygon.vertices[next_vertex_index]
+
+            # Remove the vertex from vertices list
+            del self.polygon.vertices[del_vertex_index]
+
+            # Find the two edges that reference this vertex and replace them by
+            # a single edge connecting prev_v -> next_v
+            edge_indices = [i for i, e in enumerate(self.polygon.edges) if e.v1 is vertex or e.v2 is vertex]
+
+            # We sort them for easier referencing
+            edge_indices.sort()
+            # Replace the lower index with the new connecting edge
+            replace_index = edge_indices[0]
+            self.polygon.edges[replace_index] = Edge(prev_vertex, next_vertex)
+
+            # Remove the other edge(s) that were connected with the deleted 
+            # vertex. Iterate from highest to lowest to keep indices valid
+            for del_edge_index in reversed(edge_indices[1:]):
+                del self.polygon.edges[del_edge_index]
+
+            # Rebuild view based on the new model
+            self._rebuild_childitems()
 
     # Method called by MainWindow when line drawing mode is changed
     def redraw_with_new_mode(self, mode: LineDrawingMode):
