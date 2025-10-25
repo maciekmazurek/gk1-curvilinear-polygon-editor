@@ -446,6 +446,7 @@ class PolygonItem(QGraphicsItem):
         self._dragging = False
         self._drag_start_scene = None
         self._original_vertices_positions = None
+        self._original_control_positions = None
 
         self.vertex_items = {}
         self.edge_items = []
@@ -503,7 +504,7 @@ class PolygonItem(QGraphicsItem):
 
         # Setting up edges
         for e in self.polygon.edges:
-            e_item = self.Factory(e, parent=self)
+            e_item = self.EdgeItemFactory(e, parent=self)
             self.edge_items.append(e_item)
             e_item.update_edge()
 
@@ -511,7 +512,9 @@ class PolygonItem(QGraphicsItem):
         if event.button() == Qt.LeftButton:
             self._dragging = True
             self._drag_start_scene = event.scenePos()
+            # We save original positions of vertices and control points
             self._original_vertices_positions = [(v, v.x, v.y) for v in self.polygon.vertices]
+            self._original_control_positions = [(e, e.c1.x, e.c1.y, e.c2.x, e.c2.y) for e in self.polygon.edges if e.type == EdgeType.BEZIER]
             event.accept()
         else:
             super().mousePressEvent(event)
@@ -521,9 +524,15 @@ class PolygonItem(QGraphicsItem):
             delta = event.scenePos() - self._drag_start_scene
             dx, dy = delta.x(), delta.y()
 
+            # We update original positions of vertices and control points
             for v, ox, oy in self._original_vertices_positions:
                 v.x = ox + dx
                 v.y = oy + dy
+            for e, c1x, c1y, c2x, c2y in self._original_control_positions:
+                e.c1.x = c1x + dx
+                e.c1.y = c1y + dy
+                e.c2.x = c2x + dx
+                e.c2.y = c2y + dy
 
             self.updating_from_parent = True
             try:
@@ -551,11 +560,12 @@ class PolygonItem(QGraphicsItem):
             self._dragging = False
             self._drag_start_scene = None
             self._original_vertices_positions = None
+            self._original_control_positions = None
             event.accept()
         else:
             super().mouseReleaseEvent(event)
 
-    def Factory(self, edge: Edge, parent):
+    def EdgeItemFactory(self, edge: Edge, parent):
         if edge.type == EdgeType.LINE:
             if self.line_drawing_mode == LineDrawingMode.QGRAPHICS:
                 return StandardLineEdgeItem(edge, parent)
@@ -592,7 +602,7 @@ class PolygonItem(QGraphicsItem):
 
         # Create new edge items according to new drawing mode
         for e in self.polygon.edges:
-            e_item = self.Factory(e, parent=self)
+            e_item = self.EdgeItemFactory(e, parent=self)
             self.edge_items.append(e_item)
             # Redrawing
             e_item.update_edge()
