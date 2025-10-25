@@ -1,4 +1,4 @@
-from model.model import Vertex, Edge, Polygon
+from model.model import Bezier, Vertex, Edge, Polygon
 from config import *
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem, 
@@ -42,6 +42,25 @@ class VertexItem(QGraphicsEllipseItem):
                 parent.on_vertex_moved(self.vertex, vertex_new_scene_coords)
         return super().itemChange(change, value)
     
+class ControlPointItem(QGraphicsEllipseItem):
+    def __init__(self, vertex: Vertex, parent=None, color="orange"):
+        super().__init__(-vertex.radius/1.2, -vertex.radius/1.2,
+                         vertex.radius*2/1.2, vertex.radius*2/1.2, parent)
+        self.vertex = vertex
+        self.setBrush(QBrush(QColor(color)))
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsScenePositionChanges, True)
+        # Setting Z value to be above vertices and edges
+        self.setZValue(3.0)
+
+    def itemChange(self, change: QGraphicsItem.GraphicsItemChange, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged and self.parentItem():
+            parent = self.parentItem()
+            if not parent.updating_from_parent:
+                control_new_scene_coords = parent.mapToScene(value)
+                parent.on_control_moved(self.vertex, control_new_scene_coords)
+        return super().itemChange(change, value)
+    
 class EdgeItem(QGraphicsLineItem):
     # Default line drawing mode
     line_drawing_mode = LineDrawingMode.QGRAPHICS
@@ -52,6 +71,22 @@ class EdgeItem(QGraphicsLineItem):
         # Setting Z value to be below vertices
         self.setZValue(1.0)
 
+    @staticmethod
+    def Factory(edge: Edge, parent):
+        if edge.type == EdgeType.LINE:
+            if EdgeItem.line_drawing_mode == LineDrawingMode.QGRAPHICS:
+                return StandardLineEdgeItem(edge, parent)
+            elif EdgeItem.line_drawing_mode == LineDrawingMode.BRESENHAM:
+                return BresenhamLineEdgeItem(edge, parent)
+        elif edge.type == EdgeType.BEZIER:
+            return BezierEdgeItem(edge, parent)
+
+class LineEdgeItem(EdgeItem):
+    def __init__(self, edge: Edge, parent):
+        if edge.type != EdgeType.LINE:
+            pass # Should implement raising an error
+        super().__init__(edge, parent)
+
     def convert_coords_to_parent(self):
         p1 = self.parentItem().mapFromScene(QPointF(self.edge.v1.x, 
                                                     self.edge.v1.y))
@@ -59,16 +94,8 @@ class EdgeItem(QGraphicsLineItem):
                                                     self.edge.v2.y))
         return (p1, p2)
 
-    def Factory(edge: Edge, parent):
-        if edge.type == EdgeType.LINE:
-            if EdgeItem.line_drawing_mode == LineDrawingMode.QGRAPHICS:
-                return StandardLineEdgeItem(edge, parent)
-            elif EdgeItem.line_drawing_mode == LineDrawingMode.BRESENHAM:
-                return BresenhamLineEdgeItem(edge, parent)
-        # Other edge types (BEZIER, ARC) will be handled here in the future
-
 # Rysowany za pomocą interfejsu udostępnianego przez QGraphics
-class StandardLineEdgeItem(EdgeItem):
+class StandardLineEdgeItem(LineEdgeItem):
     def __init__(self, edge: Edge, parent):
         super().__init__(edge, parent)
 
@@ -77,10 +104,10 @@ class StandardLineEdgeItem(EdgeItem):
         self.setLine(p1.x(), p1.y(), p2.x(), p2.y())
 
 # Rysowany za pomocą własnej implementacji algorytmu Bresenhama
-class BresenhamLineEdgeItem(EdgeItem):
+class BresenhamLineEdgeItem(LineEdgeItem):
     def __init__(self, edge: Edge, parent):
         super().__init__(edge, parent)
-        self._line_pixels = []
+        self._pixels = []
         self._pixmap = None
         self._pixmap_offset = QPointF(0, 0)
         self._cached_bounding_rect = QRectF(0, 0, 0, 0)
@@ -143,7 +170,7 @@ class BresenhamLineEdgeItem(EdgeItem):
         rel_x1 = x1 - minx
         rel_y1 = y1 - miny
 
-        self._line_pixels = self._calculate_bresenham(rel_x0, rel_y0, rel_x1, rel_y1)
+        self._pixels = self._calculate_bresenham(rel_x0, rel_y0, rel_x1, rel_y1)
 
         img = QImage(width, height, QImage.Format_ARGB32_Premultiplied)
         img.fill(0)  # We make sure its transparent
@@ -154,7 +181,7 @@ class BresenhamLineEdgeItem(EdgeItem):
             qp.setPen(Qt.NoPen)
             qp.setBrush(QBrush(QColor("black")))
             # Drawing pixels into image with boundaries checking
-            for px, py in self._line_pixels:
+            for px, py in self._pixels:
                 if 0 <= px < width and 0 <= py < height:
                     qp.drawRect(px, py, 1, 1)
         finally:
@@ -170,8 +197,14 @@ class BresenhamLineEdgeItem(EdgeItem):
             # Draw pixmap at precomputed offset (in parent local coordinates)
             painter.drawPixmap(self._pixmap_offset, self._pixmap)
             # Uncomment the following line to show that functionality is working
-            print(f"[DEBUG] Painting Bresenham line with {len(self._line_pixels)} pixels")
+            print(f"[DEBUG] Painting Bresenham line with {len(self._pixels)} pixels")
     
+class BezierEdgeItem(EdgeItem):
+    def __init__(self, edge: Bezier, parent):
+        if edge.type != EdgeType.BEZIER:
+            pass # Should implement raising an error
+        super().__init__(edge, parent)
+
 class PolygonItem(QGraphicsItem):
     def __init__(self, polygon: Polygon):
         super().__init__()
@@ -192,9 +225,9 @@ class PolygonItem(QGraphicsItem):
 
         self.vertex_items = {}
         self.edge_items = []
+
         self._setup_children()
 
-    # Abstract method from QGraphicsItem that must be implemented
     def boundingRect(self):
         if not self.polygon.vertices:
             return QRectF(0, 0, 0, 0)
@@ -303,6 +336,8 @@ class PolygonItem(QGraphicsItem):
         vertex.x = vertex_new_scene_coords.x()
         vertex.y = vertex_new_scene_coords.y()
 
+        # PRZEIMPLEMENTOWAĆ W TAKI SPOSÓB, ŻEBY ODPOWIEDNIO MODYFIKOWAĆ
+        # KRAWĘDZIE GDY PRZESUWANE SĄ DANE WIERZCHOŁKI
         for e_item in self.edge_items:
             if e_item.edge.v1 is vertex or e_item.edge.v2 is vertex:
                 e_item.update_edge()

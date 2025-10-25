@@ -17,7 +17,7 @@ class Vertex:
         self.radius = VERTEX_DIAMETER / 2
 
 class Edge:
-    def __init__(self, v1: Vertex, v2: Vertex, type: EdgeType):
+    def __init__(self, v1: Vertex, v2: Vertex, type: EdgeType = EdgeType.LINE):
         self.v1 = v1
         self.v2 = v2
         self.type = type
@@ -28,8 +28,10 @@ class Polygon:
         self.edges: list[Edge] = []
         for i in range(len(self.vertices)):
             self.edges.append(Edge(self.vertices[i % 3], 
-                                   self.vertices[(i + 1) % 3], 
-                                   EdgeType.LINE))
-
-# Tu w przyszłości będą zaimplementowane klasy BezierEdge i ArcEdge dziedziczące
-# po klasie Edge
+                                   self.vertices[(i + 1) % 3]))
+            
+class Bezier(Edge):
+    def __init__(self, v1: Vertex, v2: Vertex, c1: Vertex, c2: Vertex):
+        super().__init__(v1, v2, EdgeType.BEZIER)
+        self.c1 = c1 # First control point
+        self.c2 = c2 # Second control point
