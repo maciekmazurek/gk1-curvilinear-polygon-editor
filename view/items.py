@@ -454,35 +454,79 @@ class PolygonItem(QGraphicsItem):
         self._setup_children()
 
     def boundingRect(self):
-        if not self.polygon.vertices:
+        # Build union of:
+        #  - vertex bounding box (scene coords -> local)
+        #  - bounding rects of all child edge items (they are in local coords)
+        rects = []
+
+        if self.polygon.vertices:
+            minx = min(v.x for v in self.polygon.vertices)
+            miny = min(v.y for v in self.polygon.vertices)
+            maxx = max(v.x for v in self.polygon.vertices)
+            maxy = max(v.y for v in self.polygon.vertices)
+            top_left = self.mapFromScene(QPointF(minx, miny))
+            bottom_right = self.mapFromScene(QPointF(maxx, maxy))
+            rects.append(QRectF(top_left, bottom_right).normalized())
+
+        # include child edge items' bounding rects (already in local coords)
+        for e_item in getattr(self, "edge_items", []):
+            try:
+                r = e_item.boundingRect()
+            except Exception:
+                r = QRectF(0, 0, 0, 0)
+            if not r.isNull():
+                rects.append(r)
+
+        if not rects:
             return QRectF(0, 0, 0, 0)
-        minx = min(v.x for v in self.polygon.vertices)
-        miny = min(v.y for v in self.polygon.vertices)
-        maxx = max(v.x for v in self.polygon.vertices)
-        maxy = max(v.y for v in self.polygon.vertices)
 
-        top_left = self.mapFromScene(QPointF(minx, miny))
-        bottom_right = self.mapFromScene(QPointF(maxx, maxy))
-
-        return QRectF(top_left, bottom_right).normalized()
+        # union all rects
+        united = rects[0]
+        for r in rects[1:]:
+            united = united.united(r)
+        # add a small margin so handles/pen fit
+        return united.adjusted(-4, -4, 4, 4)
 
     def shape(self):
+        """
+        Build path corresponding to actual edges. This is used only for hit-testing
+        and selection. For LINE edges we add straight segments, for BEZIER we add a
+        cubicTo (used only by shape() — actual drawing of bezier is pixelized in
+        BezierEdgeItem).
+        """
         path = QPainterPath()
-        if not self.polygon.vertices:
+        if not self.polygon.edges:
             return path
-        pts = [self.mapFromScene(QPointF(v.x, v.y)) for v in self.polygon.vertices]
-        path.moveTo(pts[0])
-        for p in pts[1:]:
-            path.lineTo(p)
-        path.closeSubpath()
+
+        # start from first edge's v1
+        first_edge = self.polygon.edges[0]
+        start = self.mapFromScene(QPointF(first_edge.v1.x, first_edge.v1.y))
+        path.moveTo(start)
+
+        for e in self.polygon.edges:
+            if getattr(e, "type", None) == EdgeType.LINE:
+                p2 = self.mapFromScene(QPointF(e.v2.x, e.v2.y))
+                path.lineTo(p2)
+            elif getattr(e, "type", None) == EdgeType.BEZIER:
+                # add cubicTo for hit-testing (control points in scene coords -> map)
+                c1 = self.mapFromScene(QPointF(e.c1.x, e.c1.y))
+                c2 = self.mapFromScene(QPointF(e.c2.x, e.c2.y))
+                p3 = self.mapFromScene(QPointF(e.v2.x, e.v2.y))
+                path.cubicTo(c1, c2, p3)
+            else:
+                # fallback to straight line
+                p2 = self.mapFromScene(QPointF(e.v2.x, e.v2.y))
+                path.lineTo(p2)
+
         return path
     
     def paint(self, painter, option, widget):
-        path = self.shape()
-        if path.isEmpty():
-            return
-        painter.setPen(QPen(QColor("black")))
-        painter.drawPath(path)
+        # Do not draw polygon edges here — EdgeItem children are responsible
+        # for drawing their own representation (line / bresenham / bezier).
+        # Optionally draw selection outline when selected:
+        if self.isSelected():
+            painter.setPen(QPen(QColor("blue"), 1, Qt.DashLine))
+            painter.drawPath(self.shape())
 
     def _setup_children(self):
         self.updating_from_parent = True
