@@ -24,11 +24,15 @@ class Edge:
 
 class Polygon:
     def __init__(self):
-        self.vertices = [Vertex(1, 4), Vertex(50, -10), Vertex(200, 40)]
+        self.vertices: list[Vertex] = []
         self.edges: list[Edge] = []
-        for i in range(len(self.vertices)):
-            self.edges.append(Edge(self.vertices[i % 3], 
-                                   self.vertices[(i + 1) % 3]))
+        self.create()
+            
+    def create(self):
+        self.vertices = [Vertex(-20, 60), Vertex(50, -30), Vertex(200, 40)]
+        self.edges = [Bezier(self.vertices[0], self.vertices[1], Vertex(-50, 20), Vertex(0, -70)),
+                      Edge(self.vertices[1], self.vertices[2]),
+                      Edge(self.vertices[2], self.vertices[0])]
             
 class Bezier(Edge):
     def __init__(self, v1: Vertex, v2: Vertex, c1: Vertex, c2: Vertex):
