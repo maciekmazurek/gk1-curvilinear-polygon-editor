@@ -1,14 +1,15 @@
-import algorithms
 from model.model import Bezier, Vertex, Edge, Polygon
 from config import *
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
+    QMenu,
 )
 from PySide6.QtGui import (
     QBrush,
     QColor,
     QPainterPath,
+    QPainterPathStroker,
     QPen,
     QImage,
     QPixmap,
@@ -17,7 +18,6 @@ from PySide6.QtGui import (
 from PySide6.QtCore import QPointF, QRectF, Qt
 from model.model import LineDrawingMode, EdgeType
 
-import math
 import algorithms
 
 class VertexItem(QGraphicsEllipseItem):
@@ -93,11 +93,42 @@ class LineEdgeItem(EdgeItem):
         self._cached_bounding = QRectF(0, 0, 0, 0)
         self._p1 = QPointF()
         self._p2 = QPointF()
+        # make this item accept context menu events and right-clicks
+        self.setAcceptHoverEvents(True)
+        self.setAcceptedMouseButtons(Qt.LeftButton | Qt.RightButton)
 
     def convert_coords_to_parent(self):
         p1 = self.parentItem().mapFromScene(QPointF(self.edge.v1.x, self.edge.v1.y))
         p2 = self.parentItem().mapFromScene(QPointF(self.edge.v2.x, self.edge.v2.y))
         return (p1, p2)
+    
+    def contextMenuEvent(self, event):
+        menu = QMenu()
+        add_vertex_action = menu.addAction("Add new vertex")
+        # We have to convert screenPos from QPointF to QPoint so we can
+        # pass it to menu.exec()
+        sp = event.screenPos()
+        try:
+            qp = sp.toPoint()
+        except Exception:
+            qp = sp
+        chosen_action = menu.exec(qp)
+        if chosen_action == add_vertex_action:
+            parent = self.parentItem()
+            if parent:
+                # Pass the scene position of the edge midpoint to be explicit
+                # but the polygon's method can compute midpoint itself if desired
+                parent.add_vertex_on_edge(self.edge)
+        event.accept()
+
+    def shape(self):
+        # Provide a stroked path so mouse events (clicks/right-clicks) hit the line
+        path = QPainterPath()
+        path.moveTo(self._p1)
+        path.lineTo(self._p2)
+        stroker = QPainterPathStroker()
+        stroker.setWidth(6.0)  # clickable tolerance in parent-local coordinates
+        return stroker.createStroke(path)
 
 # Rysowany za pomocą interfejsu udostępnianego przez QGraphics
 class StandardLineEdgeItem(LineEdgeItem):
@@ -105,8 +136,8 @@ class StandardLineEdgeItem(LineEdgeItem):
         super().__init__(edge, parent)
 
     def update_edge(self):
-        p1, p2 = self.convert_coords_to_parent()
         self.prepareGeometryChange()
+        p1, p2 = self.convert_coords_to_parent()
         self._p1, self._p2 = p1, p2
         # bounding rect slightly expanded to include pen
         pen_margin = 1.0
@@ -136,8 +167,9 @@ class BresenhamLineEdgeItem(LineEdgeItem):
 
     def update_edge(self):
         self.prepareGeometryChange()
-
         p1, p2 = self.convert_coords_to_parent()
+        self._p1, self._p2 = p1, p2
+
         x0 = int(round(p1.x()))
         y0 = int(round(p1.y()))
         x1 = int(round(p2.x()))
@@ -152,10 +184,13 @@ class BresenhamLineEdgeItem(LineEdgeItem):
         width = maxx - minx + 1
         height = maxy - miny + 1
 
-        # If degenerate, clear cache
         if width <= 0 or height <= 0:
             self._pixmap = None
-            self._cached_bounding = QRectF(0, 0, 0, 0)
+            minx = min(p1.x(), p2.x()) - 1
+            miny = min(p1.y(), p2.y()) - 1
+            maxx = max(p1.x(), p2.x()) + 1
+            maxy = max(p1.y(), p2.y()) + 1
+            self._cached_bounding = QRectF(minx, miny, maxx - minx, maxy - miny)
             return
 
         # Calculate pixel coordinates relative to image (offset by minx/miny)
@@ -377,7 +412,7 @@ class PolygonItem(QGraphicsItem):
         self.vertex_items = {}
         self.edge_items = []
 
-        self._setup_children()
+        self._setup_childitems()
 
     def boundingRect(self):
         # Build union of:
@@ -454,10 +489,10 @@ class PolygonItem(QGraphicsItem):
             painter.setPen(QPen(QColor("blue"), 1, Qt.DashLine))
             painter.drawPath(self.shape())
 
-    def _setup_children(self):
+    def _setup_childitems(self):
         self.updating_from_parent = True
         try:
-            # Setting up vertices
+            # Setting up VertexItems
             for v in self.polygon.vertices:
                 v_item = VertexItem(v, parent=self)
                 # We convert vertex position from scene coordinates to parent 
@@ -472,11 +507,25 @@ class PolygonItem(QGraphicsItem):
         finally:
             self.updating_from_parent = False
 
-        # Setting up edges
+        # Setting up EdgeItems
         for e in self.polygon.edges:
             e_item = self.EdgeItemFactory(e, parent=self)
             self.edge_items.append(e_item)
             e_item.update_edge()
+
+    def _rebuild_childitems(self):
+        # Remove all childitems
+        for child in list(self.childItems()):
+            child.setParentItem(None)
+            sc = self.scene()
+            if sc:
+                sc.removeItem(child)
+        self.vertex_items.clear()
+        self.edge_items.clear()
+
+        # Rebuild
+        self._setup_childitems()
+        self.update()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -556,7 +605,29 @@ class PolygonItem(QGraphicsItem):
                 e_item.update_edge()
 
         self.update()
-    
+
+    # Method called by LineEdgeItem when user wants to create new vertex
+    def add_vertex_on_edge(self, edge: Edge):
+        v1 = edge.v1
+        v2 = edge.v2
+        new_vertex = Vertex((v1.x + v2.x) / 2, (v1.y + v2.y) / 2)
+        old_edge_index = self.polygon.edges.index(edge)
+
+        # Insert new vertex in polygon.vertices right after v1
+        try:
+            v1_idx = self.polygon.vertices.index(v1)
+        except ValueError:
+            v1_idx = len(self.polygon.vertices) - 1
+        self.polygon.vertices.insert(v1_idx + 1, new_vertex)
+
+        # Replace edges: edge -> [edge(v1,new_v), edge(new_v,v2)]
+        new_edge1 = Edge(v1, new_vertex)
+        new_edge2 = Edge(new_vertex, v2)
+        self.polygon.edges[old_edge_index] = new_edge1
+        self.polygon.edges.insert(old_edge_index + 1, new_edge2)
+
+        self._rebuild_childitems()
+
     # Method called by MainWindow when line drawing mode is changed
     def redraw_with_new_mode(self, mode: LineDrawingMode):
         # Update line drawing mode
