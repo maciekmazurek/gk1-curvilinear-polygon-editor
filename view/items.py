@@ -4,6 +4,8 @@ from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
     QMenu,
+    QInputDialog,
+    QMessageBox,
 )
 from PySide6.QtGui import (
     QBrush,
@@ -17,6 +19,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtCore import QPointF, QRectF, Qt
 from model.model import LineDrawingMode, EdgeType
+from model.model import ConstraintType
 
 import algorithms
 
@@ -120,6 +123,13 @@ class LineEdgeItem(EdgeItem):
     def contextMenuEvent(self, event):
         menu = QMenu()
         add_vertex_action = menu.addAction("Add new vertex")
+
+        # Constraint submenu actions
+        set_vertical_action = menu.addAction("Set constraint: Vertical")
+        set_45_action = menu.addAction("Set constraint: 45°")
+        set_length_action = menu.addAction("Set constraint: Fixed length...")
+        clear_constraint_action = menu.addAction("Clear constraint")
+
         # We have to convert screenPos from QPointF to QPoint so we can
         # pass it to menu.exec()
         sp = event.screenPos()
@@ -128,12 +138,30 @@ class LineEdgeItem(EdgeItem):
         except Exception:
             qp = sp
         chosen_action = menu.exec(qp)
+
+        parent = self.parentItem()
         if chosen_action == add_vertex_action:
-            parent = self.parentItem()
             if parent:
-                # Pass the scene position of the edge midpoint to be explicit
-                # but the polygon's method can compute midpoint itself if desired
                 parent.add_vertex_on_edge(self.edge)
+        elif chosen_action == set_vertical_action:
+            if parent:
+                ok = parent.apply_constraint_to_edge(self.edge, ConstraintType.VERTICAL)
+                if not ok:
+                    QMessageBox.warning(None, "Constraint", "Cannot set vertical constraint: adjacent edge is already vertical.")
+        elif chosen_action == set_45_action:
+            if parent:
+                parent.apply_constraint_to_edge(self.edge, ConstraintType.DIAGONAL_45)
+        elif chosen_action == set_length_action:
+            if parent:
+                # ask user for desired length
+                current_len = ((self.edge.v1.x - self.edge.v2.x)**2 + (self.edge.v1.y - self.edge.v2.y)**2) ** 0.5
+                val, ok = QInputDialog.getDouble(None, "Fixed length", "Length:", current_len, 0.0, 1e6, 2)
+                if ok:
+                    parent.apply_constraint_to_edge(self.edge, ConstraintType.FIXED_LENGTH, val)
+        elif chosen_action == clear_constraint_action:
+            if parent:
+                parent.apply_constraint_to_edge(self.edge, ConstraintType.NONE, None)
+
         event.accept()
 
     def shape(self):
@@ -168,6 +196,37 @@ class StandardLineEdgeItem(LineEdgeItem):
     def paint(self, painter, option, widget):
         painter.setPen(QPen(QColor("black")))
         painter.drawLine(self._p1, self._p2)
+        # Draw constraint icon if any
+        self._draw_constraint_icon(painter)
+
+    def _draw_constraint_icon(self, painter):
+        ct = getattr(self.edge, "constraint_type", ConstraintType.NONE)
+        if ct == ConstraintType.NONE:
+            return
+        mid = QPointF((self._p1.x() + self._p2.x()) / 2.0, (self._p1.y() + self._p2.y()) / 2.0)
+        painter.save()
+        painter.setPen(QPen(QColor("black")))
+        if ct == ConstraintType.VERTICAL:
+            painter.setBrush(QBrush(QColor("red")))
+            painter.drawEllipse(mid, 6, 6)
+            painter.setPen(QPen(QColor("white")))
+            painter.drawText(QRectF(mid.x()-6, mid.y()-6, 12, 12), Qt.AlignCenter, "V")
+        elif ct == ConstraintType.DIAGONAL_45:
+            painter.setBrush(QBrush(QColor("green")))
+            painter.drawEllipse(mid, 6, 6)
+            painter.setPen(QPen(QColor("white")))
+            painter.drawText(QRectF(mid.x()-6, mid.y()-6, 12, 12), Qt.AlignCenter, "45")
+        elif ct == ConstraintType.FIXED_LENGTH:
+            painter.setBrush(QBrush(QColor("blue")))
+            painter.drawEllipse(mid, 6, 6)
+            painter.setPen(QPen(QColor("white")))
+            val = self.edge.constraint_value
+            if val is None:
+                s = "?"
+            else:
+                s = f"{val:.0f}"
+            painter.drawText(QRectF(mid.x()-8, mid.y()-8, 16, 16), Qt.AlignCenter, s)
+        painter.restore()
 
 # Rysowany za pomocą własnej implementacji algorytmu Bresenhama
 class BresenhamLineEdgeItem(LineEdgeItem):
@@ -242,6 +301,43 @@ class BresenhamLineEdgeItem(LineEdgeItem):
             painter.drawPixmap(self._pixmap_offset, self._pixmap)
             # Uncomment the following line to show that functionality is working
             print(f"[DEBUG] Painting Bresenham line with {len(self._pixels)} pixels")
+        # Draw constraint icon on Bresenham lines as well (use parent-local coords)
+        # ensure _p1/_p2 exist
+        try:
+            self._draw_constraint_icon(painter)
+        except Exception:
+            pass
+
+    def _draw_constraint_icon(self, painter):
+        # Reuse the same drawing logic as StandardLineEdgeItem but compute
+        # mid based on _p1/_p2
+        ct = getattr(self.edge, "constraint_type", ConstraintType.NONE)
+        if ct == ConstraintType.NONE:
+            return
+        mid = QPointF((self._p1.x() + self._p2.x()) / 2.0, (self._p1.y() + self._p2.y()) / 2.0)
+        painter.save()
+        painter.setPen(QPen(QColor("black")))
+        if ct == ConstraintType.VERTICAL:
+            painter.setBrush(QBrush(QColor("red")))
+            painter.drawEllipse(mid, 6, 6)
+            painter.setPen(QPen(QColor("white")))
+            painter.drawText(QRectF(mid.x()-6, mid.y()-6, 12, 12), Qt.AlignCenter, "V")
+        elif ct == ConstraintType.DIAGONAL_45:
+            painter.setBrush(QBrush(QColor("green")))
+            painter.drawEllipse(mid, 6, 6)
+            painter.setPen(QPen(QColor("white")))
+            painter.drawText(QRectF(mid.x()-6, mid.y()-6, 12, 12), Qt.AlignCenter, "45")
+        elif ct == ConstraintType.FIXED_LENGTH:
+            painter.setBrush(QBrush(QColor("blue")))
+            painter.drawEllipse(mid, 6, 6)
+            painter.setPen(QPen(QColor("white")))
+            val = self.edge.constraint_value
+            if val is None:
+                s = "?"
+            else:
+                s = f"{val:.0f}"
+            painter.drawText(QRectF(mid.x()-8, mid.y()-8, 16, 16), Qt.AlignCenter, s)
+        painter.restore()
     
 class BezierEdgeItem(EdgeItem):
     def __init__(self, edge: Bezier, parent):
@@ -613,11 +709,57 @@ class PolygonItem(QGraphicsItem):
         vertex.x = vertex_new_scene_coords.x()
         vertex.y = vertex_new_scene_coords.y()
 
-        # PRZEIMPLEMENTOWAĆ W TAKI SPOSÓB, ŻEBY ODPOWIEDNIO MODYFIKOWAĆ
-        # KRAWĘDZIE GDY PRZESUWANE SĄ DANE WIERZCHOŁKI
-        for e_item in self.edge_items:
-            if e_item.edge.v1 is vertex or e_item.edge.v2 is vertex:
+        # Enforce constraints on adjacent edges (if any). Update model
+        # coordinates first (without touching visuals) and then update
+        # visuals for all vertices and edges in a single guarded block so
+        # the scene redraw stays consistent while dragging.
+        # for e_item in self.edge_items:
+        #     if e_item.edge.v1 is vertex or e_item.edge.v2 is vertex:
+        #         e = e_item.edge
+        #         other = e.v1 if e.v2 is vertex else e.v2
+        #         ct = getattr(e, "constraint_type", ConstraintType.NONE)
+        #         if ct == ConstraintType.VERTICAL:
+        #             # keep x same as other endpoint
+        #             vertex.x = other.x
+        #         elif ct == ConstraintType.DIAGONAL_45:
+        #             # constrain dx and dy to equal magnitude (45°)
+        #             dx = vertex.x - other.x
+        #             dy = vertex.y - other.y
+        #             sx = 1 if dx >= 0 else -1
+        #             sy = 1 if dy >= 0 else -1
+        #             mag = max(abs(dx), abs(dy))
+        #             vertex.x = other.x + sx * mag
+        #             vertex.y = other.y + sy * mag
+        #         elif ct == ConstraintType.FIXED_LENGTH:
+        #             L = e.constraint_value
+        #             if L is None:
+        #                 pass
+        #             else:
+        #                 dx = vertex.x - other.x
+        #                 dy = vertex.y - other.y
+        #                 dist = (dx*dx + dy*dy) ** 0.5
+        #                 if dist == 0:
+        #                     vertex.x = other.x + L
+        #                     vertex.y = other.y
+        #                 else:
+        #                     scale = L / dist
+        #                     vertex.x = other.x + dx * scale
+        #                     vertex.y = other.y + dy * scale
+
+        
+
+        # Now update the visuals (positions of vertex items and all edges)
+        # in a single guarded operation to avoid recursive itemChange calls
+        # and visual inconsistencies.
+        self.updating_from_parent = True
+        try:
+            for v, v_item in self.vertex_items.items():
+                vertex_parent_coords = self.mapFromScene(QPointF(v.x, v.y))
+                v_item.setPos(vertex_parent_coords)
+            for e_item in self.edge_items:
                 e_item.update_edge()
+        finally:
+            self.updating_from_parent = False
 
         self.update()
 
@@ -638,6 +780,11 @@ class PolygonItem(QGraphicsItem):
         # Replace edges: edge -> [edge(v1,new_v), edge(new_v,v2)]
         new_edge1 = Edge(v1, new_vertex)
         new_edge2 = Edge(new_vertex, v2)
+        # New edges inherit no constraints from the parent edge
+        new_edge1.constraint_type = ConstraintType.NONE
+        new_edge1.constraint_value = None
+        new_edge2.constraint_type = ConstraintType.NONE
+        new_edge2.constraint_value = None
         self.polygon.edges[old_edge_index] = new_edge1
         self.polygon.edges.insert(old_edge_index + 1, new_edge2)
 
@@ -677,6 +824,70 @@ class PolygonItem(QGraphicsItem):
 
             # Rebuild view based on the new model
             self._rebuild_childitems()
+
+    def apply_constraint_to_edge(self, edge: Edge, constraint_type: ConstraintType, value=None) -> bool:
+        """Apply (or clear) a single constraint to `edge`.
+
+        Returns True if applied, False if rejected (e.g. neighbor vertical conflict).
+        """
+        # Find edge index
+        try:
+            idx = self.polygon.edges.index(edge)
+        except ValueError:
+            return False
+
+        # If clearing constraint
+        if constraint_type == ConstraintType.NONE:
+            edge.constraint_type = ConstraintType.NONE
+            edge.constraint_value = None
+            self._rebuild_childitems()
+            return True
+
+        # Check neighbor constraints for disallowed combinations
+        n_edges = len(self.polygon.edges)
+        prev_edge = self.polygon.edges[(idx - 1) % n_edges]
+        next_edge = self.polygon.edges[(idx + 1) % n_edges]
+        if constraint_type == ConstraintType.VERTICAL:
+            if getattr(prev_edge, 'constraint_type', ConstraintType.NONE) == ConstraintType.VERTICAL or getattr(next_edge, 'constraint_type', ConstraintType.NONE) == ConstraintType.VERTICAL:
+                return False
+
+        # Apply constraint to model
+        edge.constraint_type = constraint_type
+        edge.constraint_value = value
+
+        # Enforce the constraint immediately by adjusting one endpoint (v2)
+        other = edge.v1
+        moving = edge.v2
+        if constraint_type == ConstraintType.VERTICAL:
+            moving.x = other.x
+        elif constraint_type == ConstraintType.DIAGONAL_45:
+            dx = moving.x - other.x
+            dy = moving.y - other.y
+            sx = 1 if dx >= 0 else -1
+            sy = 1 if dy >= 0 else -1
+            mag = max(abs(dx), abs(dy))
+            moving.x = other.x + sx * mag
+            moving.y = other.y + sy * mag
+        elif constraint_type == ConstraintType.FIXED_LENGTH:
+            L = value
+            if L is None:
+                # nothing to enforce
+                pass
+            else:
+                dx = moving.x - other.x
+                dy = moving.y - other.y
+                dist = (dx*dx + dy*dy) ** 0.5
+                if dist == 0:
+                    moving.x = other.x + L
+                    moving.y = other.y
+                else:
+                    scale = L / dist
+                    moving.x = other.x + dx * scale
+                    moving.y = other.y + dy * scale
+
+        # Rebuild view to show icon and updated positions
+        self._rebuild_childitems()
+        return True
 
     # Method called by MainWindow when line drawing mode is changed
     def redraw_with_new_mode(self, mode: LineDrawingMode):

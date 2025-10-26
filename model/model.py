@@ -6,6 +6,13 @@ class EdgeType(Enum):
     BEZIER = 2
     ARC = 3
 
+
+class ConstraintType(Enum):
+    NONE = 0
+    VERTICAL = 1
+    DIAGONAL_45 = 2
+    FIXED_LENGTH = 3
+
 class LineDrawingMode(Enum):
     QGRAPHICS = 1
     BRESENHAM = 2
@@ -21,6 +28,10 @@ class Edge:
         self.v1 = v1
         self.v2 = v2
         self.type = type
+        # Constraint info
+        self.constraint_type: ConstraintType = ConstraintType.NONE
+        # For FIXED_LENGTH store desired length in same units as vertex coords
+        self.constraint_value: float | None = None
 
 class Polygon:
     def __init__(self):
