@@ -6,7 +6,6 @@ class EdgeType(Enum):
     BEZIER = 2
     ARC = 3
 
-
 class ConstraintType(Enum):
     NONE = 0
     VERTICAL = 1
@@ -37,6 +36,7 @@ class Polygon:
     def __init__(self):
         self.vertices: list[Vertex] = []
         self.edges: list[Edge] = []
+        self.edges_dict = {}
         self.create()
             
     def create(self):
@@ -44,6 +44,9 @@ class Polygon:
         self.edges = [Bezier(self.vertices[0], self.vertices[1], Vertex(-50, 20), Vertex(0, -70)),
                       Edge(self.vertices[1], self.vertices[2]),
                       Edge(self.vertices[2], self.vertices[0])]
+        for edge in self.edges:
+            self.edges_dict[(edge.v1, edge.v2)] = edge
+            self.edges_dict[(edge.v2, edge.v1)] = edge
             
 class Bezier(Edge):
     def __init__(self, v1: Vertex, v2: Vertex, c1: Vertex, c2: Vertex):

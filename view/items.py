@@ -1,4 +1,4 @@
-from model.model import Bezier, Vertex, Edge, Polygon
+from model.model import *
 from config import *
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
@@ -18,8 +18,6 @@ from PySide6.QtGui import (
     QPainter
 )
 from PySide6.QtCore import QPointF, QRectF, Qt
-from model.model import LineDrawingMode, EdgeType
-from model.model import ConstraintType
 
 import algorithms
 
@@ -123,15 +121,13 @@ class LineEdgeItem(EdgeItem):
     def contextMenuEvent(self, event):
         menu = QMenu()
         add_vertex_action = menu.addAction("Add new vertex")
-
-        # Constraint submenu actions
         set_vertical_action = menu.addAction("Set constraint: Vertical")
         set_45_action = menu.addAction("Set constraint: 45°")
         set_length_action = menu.addAction("Set constraint: Fixed length...")
         clear_constraint_action = menu.addAction("Clear constraint")
 
-        # We have to convert screenPos from QPointF to QPoint so we can
-        # pass it to menu.exec()
+        # Converting screenPos from QPointF to QPoint so we can pass it to
+        # menu.exec()
         sp = event.screenPos()
         try:
             qp = sp.toPoint()
@@ -601,6 +597,11 @@ class PolygonItem(QGraphicsItem):
             painter.drawPath(self.shape())
 
     def _setup_childitems(self):
+        # Ensure the polygon.edges_dict matches the current edges list so
+        # other code that relies on it (e.g. constraint propagation) can
+        # look up edges by endpoint pairs.
+        self._sync_edges_dict()
+
         self.updating_from_parent = True
         try:
             # Setting up VertexItems
@@ -634,9 +635,36 @@ class PolygonItem(QGraphicsItem):
         self.vertex_items.clear()
         self.edge_items.clear()
 
-        # Rebuild
+        # Rebuild (this will also sync edges_dict)
         self._setup_childitems()
         self.update()
+
+    def _sync_edges_dict(self):
+        # Recreate mapping from (v1, v2) -> Edge for current polygon.edges
+        d = {}
+        for e in self.polygon.edges:
+            try:
+                # store both orientations to make lookups robust regardless
+                # of which vertex is passed first during propagation
+                d[(e.v1, e.v2)] = e
+                d[(e.v2, e.v1)] = e
+            except Exception:
+                # guard: skip malformed edges
+                continue
+        self.polygon.edges_dict = d
+
+    def _edge_between(self, a: Vertex, b: Vertex) -> Edge | None:
+        """Return the Edge instance connecting vertices a and b if present.
+
+        The edges_dict stores keys as ordered pairs (v1, v2). This helper
+        tries both orientations and returns None if no connecting edge is
+        found. This prevents KeyError during drag propagation when order may
+        differ.
+        """
+        ed = getattr(self.polygon, 'edges_dict', None)
+        if not ed:
+            return None
+        return ed.get((a, b)) or ed.get((b, a))
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -709,45 +737,36 @@ class PolygonItem(QGraphicsItem):
         vertex.x = vertex_new_scene_coords.x()
         vertex.y = vertex_new_scene_coords.y()
 
-        # Enforce constraints on adjacent edges (if any). Update model
-        # coordinates first (without touching visuals) and then update
-        # visuals for all vertices and edges in a single guarded block so
-        # the scene redraw stays consistent while dragging.
-        # for e_item in self.edge_items:
-        #     if e_item.edge.v1 is vertex or e_item.edge.v2 is vertex:
-        #         e = e_item.edge
-        #         other = e.v1 if e.v2 is vertex else e.v2
-        #         ct = getattr(e, "constraint_type", ConstraintType.NONE)
-        #         if ct == ConstraintType.VERTICAL:
-        #             # keep x same as other endpoint
-        #             vertex.x = other.x
-        #         elif ct == ConstraintType.DIAGONAL_45:
-        #             # constrain dx and dy to equal magnitude (45°)
-        #             dx = vertex.x - other.x
-        #             dy = vertex.y - other.y
-        #             sx = 1 if dx >= 0 else -1
-        #             sy = 1 if dy >= 0 else -1
-        #             mag = max(abs(dx), abs(dy))
-        #             vertex.x = other.x + sx * mag
-        #             vertex.y = other.y + sy * mag
-        #         elif ct == ConstraintType.FIXED_LENGTH:
-        #             L = e.constraint_value
-        #             if L is None:
-        #                 pass
-        #             else:
-        #                 dx = vertex.x - other.x
-        #                 dy = vertex.y - other.y
-        #                 dist = (dx*dx + dy*dy) ** 0.5
-        #                 if dist == 0:
-        #                     vertex.x = other.x + L
-        #                     vertex.y = other.y
-        #                 else:
-        #                     scale = L / dist
-        #                     vertex.x = other.x + dx * scale
-        #                     vertex.y = other.y + dy * scale
+        # Propagate constraints in both directions around the polygon (circular)
+        n = len(self.polygon.vertices)
+        if n > 1:
+            # Rightwards propagation (increasing index, wrap-around)
+            idx = self.polygon.vertices.index(vertex)
+            i = idx
+            while True:
+                j = (i + 1) % n
+                if j == idx:
+                    break
+                v1 = self.polygon.vertices[i]
+                v2 = self.polygon.vertices[j]
+                continue_propagation = self._relax_edge_constraint(v1, v2)
+                if not continue_propagation:
+                    break
+                i = j
 
+            # Leftwards propagation (decreasing index, wrap-around)
+            i = idx
+            while True:
+                j = (i - 1) % n
+                if j == idx:
+                    break
+                v1 = self.polygon.vertices[i]
+                v2 = self.polygon.vertices[j]
+                continue_propagation = self._relax_edge_constraint(v1, v2)
+                if not continue_propagation:
+                    break
+                i = j
         
-
         # Now update the visuals (positions of vertex items and all edges)
         # in a single guarded operation to avoid recursive itemChange calls
         # and visual inconsistencies.
@@ -762,6 +781,41 @@ class PolygonItem(QGraphicsItem):
             self.updating_from_parent = False
 
         self.update()
+
+    def _relax_edge_constraint(self, v1: Vertex, v2: Vertex) -> bool:
+        current_edge = self._edge_between(v1, v2)
+        # If we couldn't find an edge connecting v1 and v2, stop propagation
+        if current_edge is None:
+            return False
+        # Jeżeli krawedz nie ma ograniczenia to przerywamy propagacje
+        if current_edge.constraint_type == ConstraintType.NONE:
+            return False
+        elif current_edge.constraint_type == ConstraintType.VERTICAL:
+            v2.x = v1.x
+        elif current_edge.constraint_type == ConstraintType.FIXED_LENGTH:
+            L = current_edge.constraint_value
+            dx = v2.x - v1.x
+            dy = v2.y - v1.y
+            dist = (dx*dx + dy*dy) ** 0.5
+            if dist == 0:
+                v2.x = v1.x + L
+                v2.y = v1.y
+            else:
+                scale = L / dist
+                v2.x = v1.x + dx * scale
+                v2.y = v1.y + dy * scale
+        elif current_edge.constraint_type == ConstraintType.DIAGONAL_45:
+            dx = v2.x - v1.x
+            dy = v2.y - v1.y
+            sx = 1 if dx >= 0 else -1
+            sy = 1 if dy >= 0 else -1
+            mag = max(abs(dx), abs(dy))
+            v2.x = v1.x + sx * mag
+            v2.y = v1.y + sy * mag
+        else:
+            return False
+
+        return True
 
     # Method called by LineEdgeItem when user wants to create new vertex
     def add_vertex_on_edge(self, edge: Edge):
@@ -788,7 +842,9 @@ class PolygonItem(QGraphicsItem):
         self.polygon.edges[old_edge_index] = new_edge1
         self.polygon.edges.insert(old_edge_index + 1, new_edge2)
 
-        # Rebuild view based on the new model
+        # Sync the model's edge dictionary now that edges changed, then
+        # rebuild view based on the new model
+        self._sync_edges_dict()
         self._rebuild_childitems()
 
     # Method called by VertexItem when user wants to delete it
@@ -822,19 +878,12 @@ class PolygonItem(QGraphicsItem):
             for del_edge_index in reversed(edge_indices[1:]):
                 del self.polygon.edges[del_edge_index]
 
-            # Rebuild view based on the new model
+            # Sync edges dict and rebuild view based on the new model
+            self._sync_edges_dict()
             self._rebuild_childitems()
 
     def apply_constraint_to_edge(self, edge: Edge, constraint_type: ConstraintType, value=None) -> bool:
-        """Apply (or clear) a single constraint to `edge`.
-
-        Returns True if applied, False if rejected (e.g. neighbor vertical conflict).
-        """
-        # Find edge index
-        try:
-            idx = self.polygon.edges.index(edge)
-        except ValueError:
-            return False
+        idx = self.polygon.edges.index(edge)
 
         # If clearing constraint
         if constraint_type == ConstraintType.NONE:
@@ -844,9 +893,9 @@ class PolygonItem(QGraphicsItem):
             return True
 
         # Check neighbor constraints for disallowed combinations
-        n_edges = len(self.polygon.edges)
-        prev_edge = self.polygon.edges[(idx - 1) % n_edges]
-        next_edge = self.polygon.edges[(idx + 1) % n_edges]
+        n = len(self.polygon.edges)
+        prev_edge = self.polygon.edges[(idx - 1) % n]
+        next_edge = self.polygon.edges[(idx + 1) % n]
         if constraint_type == ConstraintType.VERTICAL:
             if getattr(prev_edge, 'constraint_type', ConstraintType.NONE) == ConstraintType.VERTICAL or getattr(next_edge, 'constraint_type', ConstraintType.NONE) == ConstraintType.VERTICAL:
                 return False
