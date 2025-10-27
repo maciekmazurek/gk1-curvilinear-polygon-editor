@@ -160,6 +160,35 @@ class LineEdgeItem(EdgeItem):
 
         event.accept()
 
+    def _draw_constraint_icon(self, painter):
+        ct = getattr(self.edge, "constraint_type", ConstraintType.NONE)
+        if ct == ConstraintType.NONE:
+            return
+        mid = QPointF((self._p1.x() + self._p2.x()) / 2.0, (self._p1.y() + self._p2.y()) / 2.0)
+        painter.save()
+        painter.setPen(QPen(QColor("black")))
+        if ct == ConstraintType.VERTICAL:
+            painter.setBrush(QBrush(QColor("red")))
+            painter.drawEllipse(mid, 6, 6)
+            painter.setPen(QPen(QColor("white")))
+            painter.drawText(QRectF(mid.x()-6, mid.y()-6, 12, 12), Qt.AlignCenter, "V")
+        elif ct == ConstraintType.DIAGONAL_45:
+            painter.setBrush(QBrush(QColor("green")))
+            painter.drawEllipse(mid, 6, 6)
+            painter.setPen(QPen(QColor("white")))
+            painter.drawText(QRectF(mid.x()-6, mid.y()-6, 12, 12), Qt.AlignCenter, "45")
+        elif ct == ConstraintType.FIXED_LENGTH:
+            painter.setBrush(QBrush(QColor("blue")))
+            painter.drawEllipse(mid, 6, 6)
+            painter.setPen(QPen(QColor("white")))
+            val = self.edge.constraint_value
+            if val is None:
+                s = "?"
+            else:
+                s = f"{val:.0f}"
+            painter.drawText(QRectF(mid.x()-8, mid.y()-8, 16, 16), Qt.AlignCenter, s)
+        painter.restore()
+
     def shape(self):
         # Provide a stroked path so mouse events (clicks/right-clicks) hit the line
         path = QPainterPath()
@@ -192,37 +221,7 @@ class StandardLineEdgeItem(LineEdgeItem):
     def paint(self, painter, option, widget):
         painter.setPen(QPen(QColor("black")))
         painter.drawLine(self._p1, self._p2)
-        # Draw constraint icon if any
         self._draw_constraint_icon(painter)
-
-    def _draw_constraint_icon(self, painter):
-        ct = getattr(self.edge, "constraint_type", ConstraintType.NONE)
-        if ct == ConstraintType.NONE:
-            return
-        mid = QPointF((self._p1.x() + self._p2.x()) / 2.0, (self._p1.y() + self._p2.y()) / 2.0)
-        painter.save()
-        painter.setPen(QPen(QColor("black")))
-        if ct == ConstraintType.VERTICAL:
-            painter.setBrush(QBrush(QColor("red")))
-            painter.drawEllipse(mid, 6, 6)
-            painter.setPen(QPen(QColor("white")))
-            painter.drawText(QRectF(mid.x()-6, mid.y()-6, 12, 12), Qt.AlignCenter, "V")
-        elif ct == ConstraintType.DIAGONAL_45:
-            painter.setBrush(QBrush(QColor("green")))
-            painter.drawEllipse(mid, 6, 6)
-            painter.setPen(QPen(QColor("white")))
-            painter.drawText(QRectF(mid.x()-6, mid.y()-6, 12, 12), Qt.AlignCenter, "45")
-        elif ct == ConstraintType.FIXED_LENGTH:
-            painter.setBrush(QBrush(QColor("blue")))
-            painter.drawEllipse(mid, 6, 6)
-            painter.setPen(QPen(QColor("white")))
-            val = self.edge.constraint_value
-            if val is None:
-                s = "?"
-            else:
-                s = f"{val:.0f}"
-            painter.drawText(QRectF(mid.x()-8, mid.y()-8, 16, 16), Qt.AlignCenter, s)
-        painter.restore()
 
 # Rysowany za pomocą własnej implementacji algorytmu Bresenhama
 class BresenhamLineEdgeItem(LineEdgeItem):
@@ -297,44 +296,8 @@ class BresenhamLineEdgeItem(LineEdgeItem):
             painter.drawPixmap(self._pixmap_offset, self._pixmap)
             # Uncomment the following line to show that functionality is working
             print(f"[DEBUG] Painting Bresenham line with {len(self._pixels)} pixels")
-        # Draw constraint icon on Bresenham lines as well (use parent-local coords)
-        # ensure _p1/_p2 exist
-        try:
             self._draw_constraint_icon(painter)
-        except Exception:
-            pass
 
-    def _draw_constraint_icon(self, painter):
-        # Reuse the same drawing logic as StandardLineEdgeItem but compute
-        # mid based on _p1/_p2
-        ct = getattr(self.edge, "constraint_type", ConstraintType.NONE)
-        if ct == ConstraintType.NONE:
-            return
-        mid = QPointF((self._p1.x() + self._p2.x()) / 2.0, (self._p1.y() + self._p2.y()) / 2.0)
-        painter.save()
-        painter.setPen(QPen(QColor("black")))
-        if ct == ConstraintType.VERTICAL:
-            painter.setBrush(QBrush(QColor("red")))
-            painter.drawEllipse(mid, 6, 6)
-            painter.setPen(QPen(QColor("white")))
-            painter.drawText(QRectF(mid.x()-6, mid.y()-6, 12, 12), Qt.AlignCenter, "V")
-        elif ct == ConstraintType.DIAGONAL_45:
-            painter.setBrush(QBrush(QColor("green")))
-            painter.drawEllipse(mid, 6, 6)
-            painter.setPen(QPen(QColor("white")))
-            painter.drawText(QRectF(mid.x()-6, mid.y()-6, 12, 12), Qt.AlignCenter, "45")
-        elif ct == ConstraintType.FIXED_LENGTH:
-            painter.setBrush(QBrush(QColor("blue")))
-            painter.drawEllipse(mid, 6, 6)
-            painter.setPen(QPen(QColor("white")))
-            val = self.edge.constraint_value
-            if val is None:
-                s = "?"
-            else:
-                s = f"{val:.0f}"
-            painter.drawText(QRectF(mid.x()-8, mid.y()-8, 16, 16), Qt.AlignCenter, s)
-        painter.restore()
-    
 class BezierEdgeItem(EdgeItem):
     def __init__(self, edge: Bezier, parent):
         if edge.type != EdgeType.BEZIER:
@@ -354,12 +317,19 @@ class BezierEdgeItem(EdgeItem):
         self._place_control_handles()
         self.update_edge()
 
+    def convert_coords_to_parent(self):
+        p0 = self.mapFromScene(QPointF(self.edge.v1.x, self.edge.v1.y))
+        p1 = self.mapFromScene(QPointF(self.edge.c1.x, self.edge.c1.y))
+        p2 = self.mapFromScene(QPointF(self.edge.c2.x, self.edge.c2.y))
+        p3 = self.mapFromScene(QPointF(self.edge.v2.x, self.edge.v2.y))
+        return (p0, p1, p2, p3)
+    
     def _place_control_handles(self):
-        # map model (scene coords) to local parent coords and set pos without triggering callbacks
+        # Convert scene coords to local parent coords and set position without
+        # triggering callbacks
         self.updating_from_parent = True
         try:
-            p1 = self.mapFromScene(QPointF(self.edge.c1.x, self.edge.c1.y))
-            p2 = self.mapFromScene(QPointF(self.edge.c2.x, self.edge.c2.y))
+            _, p1, p2, _ = self.convert_coords_to_parent()
             self.control_handle_1.setPos(p1)
             self.control_handle_2.setPos(p2)
         finally:
@@ -374,11 +344,8 @@ class BezierEdgeItem(EdgeItem):
         self.update()
     
     def update_edge(self):
-        # Convert control points to local (parent) coordinates for rasterization
-        p0 = self.mapFromScene(QPointF(self.edge.v1.x, self.edge.v1.y))
-        p1 = self.mapFromScene(QPointF(self.edge.c1.x, self.edge.c1.y))
-        p2 = self.mapFromScene(QPointF(self.edge.c2.x, self.edge.c2.y))
-        p3 = self.mapFromScene(QPointF(self.edge.v2.x, self.edge.v2.y))
+        # Convert scene coords to local parent coords
+        p0, p1, p2, p3 = self.convert_coords_to_parent()
 
         # Build control-polygon path and its bounding rect (local coords)
         control_path = QPainterPath()
@@ -428,10 +395,9 @@ class BezierEdgeItem(EdgeItem):
         pix_rect = QRectF(minx, miny, width, height)
         new_bounding = control_rect.united(pix_rect)
 
-        # prepare for geometry change BEFORE updating cached geometry
+        # Prepare for geometry change before updating cached geometry
         self.prepareGeometryChange()
 
-        # create image and rasterize pixels relative to minx/miny
         img = QImage(width, height, QImage.Format_ARGB32_Premultiplied)
         img.fill(0)
 
@@ -461,10 +427,7 @@ class BezierEdgeItem(EdgeItem):
     def paint(self, painter, option, widget):
         # Draw control polygon (dashed)
         painter.setPen(QPen(QColor("gray"), 1, Qt.DashLine))
-        p0 = self.mapFromScene(QPointF(self.edge.v1.x, self.edge.v1.y))
-        p1 = self.mapFromScene(QPointF(self.edge.c1.x, self.edge.c1.y))
-        p2 = self.mapFromScene(QPointF(self.edge.c2.x, self.edge.c2.y))
-        p3 = self.mapFromScene(QPointF(self.edge.v2.x, self.edge.v2.y))
+        p0, p1, p2, p3 = self.convert_coords_to_parent()
         painter.drawLine(p0, p1)
         painter.drawLine(p1, p2)
         painter.drawLine(p2, p3)
@@ -482,10 +445,7 @@ class BezierEdgeItem(EdgeItem):
         # if getattr(self, "_path_cache", None) is not None:
         #     return self._path_cache
         # fallback: build transient path from current control points
-        p0 = self.mapFromScene(QPointF(self.edge.v1.x, self.edge.v1.y))
-        p1 = self.mapFromScene(QPointF(self.edge.c1.x, self.edge.c1.y))
-        p2 = self.mapFromScene(QPointF(self.edge.c2.x, self.edge.c2.y))
-        p3 = self.mapFromScene(QPointF(self.edge.v2.x, self.edge.v2.y))
+        p0, p1, p2, p3 = self.convert_coords_to_parent()
         path = QPainterPath()
         path.moveTo(p0)
         path.lineTo(p1)
@@ -635,7 +595,7 @@ class PolygonItem(QGraphicsItem):
         self.vertex_items.clear()
         self.edge_items.clear()
 
-        # Rebuild (this will also sync edges_dict)
+        # Rebuild
         self._setup_childitems()
         self.update()
 
@@ -767,9 +727,7 @@ class PolygonItem(QGraphicsItem):
                     break
                 i = j
         
-        # Now update the visuals (positions of vertex items and all edges)
-        # in a single guarded operation to avoid recursive itemChange calls
-        # and visual inconsistencies.
+        # Updating the visuals
         self.updating_from_parent = True
         try:
             for v, v_item in self.vertex_items.items():
