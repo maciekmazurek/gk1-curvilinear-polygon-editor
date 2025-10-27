@@ -1,31 +1,14 @@
 from model import *
-from config import *
-from PySide6.QtWidgets import (
-    QGraphicsEllipseItem,
-    QGraphicsItem,
-    QMenu,
-    QInputDialog,
-    QMessageBox,
-)
-from PySide6.QtGui import (
-    QBrush,
-    QColor,
-    QPainterPath,
-    QPainterPathStroker,
-    QPen,
-    QImage,
-    QPixmap,
-    QPainter
-)
-from PySide6.QtCore import QPointF, QRectF, Qt
-
-import algorithms
-
 from graphics.vertex_item import VertexItem
-from graphics.control_point_item import ControlPointItem
-from graphics.edge_item import EdgeItem
 from graphics.line_edge_item import StandardLineEdgeItem, BresenhamLineEdgeItem
 from graphics.bezier_edge_item import BezierEdgeItem
+from PySide6.QtWidgets import QGraphicsItem
+from PySide6.QtGui import (
+    QColor,
+    QPainterPath,
+    QPen,
+)
+from PySide6.QtCore import QPointF, QRectF, Qt
 
 class PolygonItem(QGraphicsItem):
     def __init__(self, polygon: Polygon):
