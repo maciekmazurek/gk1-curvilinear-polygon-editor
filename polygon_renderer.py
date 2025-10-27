@@ -1,4 +1,4 @@
-from model.model import Polygon
+from model import Polygon
 from view.items import PolygonItem
 from PySide6.QtWidgets import QGraphicsScene
 

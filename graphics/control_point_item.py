@@ -1,4 +1,4 @@
-from model.model import *
+from model import *
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,

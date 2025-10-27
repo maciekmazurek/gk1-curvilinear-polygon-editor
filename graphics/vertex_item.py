@@ -1,4 +1,4 @@
-from model.model import Vertex
+from model import Vertex
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
