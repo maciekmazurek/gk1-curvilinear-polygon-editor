@@ -621,12 +621,14 @@ class PolygonItem(QGraphicsItem):
         finally:
             self.updating_from_parent = False
 
-        try:
-            for v in self.polygon.vertices:
-                if getattr(v, 'continuity', None) is not None and v.continuity != ContinuityType.G0:
-                    self.enforce_vertex_continuity_from_vertex(v)
-        except Exception:
-            pass
+        # try:
+        #     for v in self.polygon.vertices:
+        #         if getattr(v, 'continuity', None) is not None and v.continuity != ContinuityType.G0:
+        #             self.enforce_vertex_continuity_from_vertex(v)
+        # except Exception:
+        #     pass
+
+        self.on_vertex_moved(other, QPointF(other.x, other.y))
 
         try:
             self.update()
