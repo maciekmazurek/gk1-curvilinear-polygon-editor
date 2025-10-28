@@ -10,6 +10,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtCore import QPointF, QRectF, Qt
 
+import math
+
 class PolygonItem(QGraphicsItem):
     def __init__(self, polygon: Polygon):
         super().__init__()
@@ -352,6 +354,64 @@ class PolygonItem(QGraphicsItem):
         next_edge = self.polygon.edges[next_idx]
         return (prev_edge, prev_idx, next_edge, next_idx)
 
+    @staticmethod
+    def _normalize_vector(vec: tuple[float, float]) -> tuple[tuple[float, float] | None, float]:
+        length = math.hypot(vec[0], vec[1])
+        if length < 1e-8:
+            return (None, length)
+        return ((vec[0] / length, vec[1] / length), length)
+
+    def _project_direction_to_constraint(
+        self,
+        vertex: Vertex,
+        other_vertex: Vertex,
+        desired_dir: tuple[float, float] | None,
+        constraint_type: ConstraintType,
+        constraint_value,
+    ) -> tuple[tuple[float, float], float]:
+        vx = vertex.x
+        vy = vertex.y
+        dx = other_vertex.x - vx
+        dy = other_vertex.y - vy
+        _, current_len = self._normalize_vector((dx, dy))
+        if current_len < 1e-8:
+            if constraint_type == ConstraintType.FIXED_LENGTH and constraint_value:
+                current_len = abs(constraint_value)
+            else:
+                current_len = 1.0
+
+        if desired_dir is None:
+            desired_dir = (dx, dy)
+
+        dir_norm, _ = self._normalize_vector(desired_dir)
+        if dir_norm is None:
+            dir_norm, _ = self._normalize_vector((dx, dy))
+        if dir_norm is None:
+            dir_norm = (1.0, 0.0)
+
+        ux, uy = dir_norm
+
+        if constraint_type == ConstraintType.VERTICAL:
+            sign = -1.0 if uy < 0 else 1.0 if uy > 0 else (-1.0 if dy < 0 else 1.0)
+            ux = 0.0
+            uy = sign
+            base_len = current_len
+        elif constraint_type == ConstraintType.DIAGONAL_45:
+            sx = -1.0 if ux < 0 else 1.0 if ux > 0 else (-1.0 if dx < 0 else 1.0)
+            sy = -1.0 if uy < 0 else 1.0 if uy > 0 else (-1.0 if dy < 0 else 1.0)
+            factor = 1.0 / math.sqrt(2.0)
+            ux = sx * factor
+            uy = sy * factor
+            base_len = current_len
+        elif constraint_type == ConstraintType.FIXED_LENGTH:
+            base_len = abs(constraint_value) if constraint_value is not None else current_len
+            if base_len < 1e-8:
+                base_len = current_len if current_len > 1e-8 else 1.0
+        else:
+            base_len = current_len
+
+        return (ux, uy), base_len
+
     def apply_continuity_to_vertex(self, vertex: Vertex, continuity: ContinuityType) -> bool:
         # Applicable when at least one adjacent edge is Bezier
         prev_edge, prev_idx, next_edge, next_idx = self._adjacent_edges_of_vertex(vertex)
@@ -497,16 +557,8 @@ class PolygonItem(QGraphicsItem):
     # sąsiadującego z vertex, z którym tworzy zwykłą krawędź)
     def enforce_vertex_continuity_from_control(self, vertex: Vertex):
         """Called when a bezier control handle adjacent to `vertex` moved.
-        Adjusts the neighbor geometry so the requested continuity at `vertex`
-        is preserved. Behavior mirrors `enforce_vertex_continuity_from_vertex`.
-
-        For both-bezier joins we adjust the opposite control to match the
-        moved handle (G1 preserves direction/length relationships, C1 enforces
-        exact tangent equality). For mixed Bezier/Line joins we modify the
-        neighbouring vertex that forms the straight edge so the line tangent
-        matches the bezier tangent (for G1 we preserve the line length; for
-        C1 we set the line tangent equal exactly).
-        """
+        Adjusts neighbouring geometry while keeping continuity and honoring
+        any constraint on the adjacent straight edge."""
         prev_edge, prev_idx, next_edge, next_idx = self._adjacent_edges_of_vertex(vertex)
         if prev_edge is None or next_edge is None:
             return
@@ -521,10 +573,9 @@ class PolygonItem(QGraphicsItem):
         prev_is_bezier = getattr(prev_edge, 'type', None) == EdgeType.BEZIER
         next_is_bezier = getattr(next_edge, 'type', None) == EdgeType.BEZIER
 
-        import math
+        moved_vertices = []
 
-        # Case A: both Bezier — decide which handle to treat as the source
-        # (the one that was moved will typically have non-zero length)
+        # Case A: both Bezier — mirror logic from vertex-based enforcement
         if prev_is_bezier and next_is_bezier:
             prev_c2 = prev_edge.c2
             next_c1 = next_edge.c1
@@ -540,10 +591,8 @@ class PolygonItem(QGraphicsItem):
                 if prev_len > 1e-8:
                     ux = pvx / prev_len
                     uy = pvy / prev_len
-                    # move next.c1 to be in same direction, preserve its length
                     next_edge.c1.x = vx + ux * next_len
                     next_edge.c1.y = vy + uy * next_len
-                    # snap prev.c2 to exact opposite direction/length
                     prev_edge.c2.x = vx - ux * prev_len
                     prev_edge.c2.y = vy - uy * prev_len
                 elif next_len > 1e-8:
@@ -552,67 +601,111 @@ class PolygonItem(QGraphicsItem):
                     prev_edge.c2.x = vx - ux * prev_len
                     prev_edge.c2.y = vy - uy * prev_len
             elif cont == ContinuityType.C1:
-                # enforce equality of tangent vectors
                 next_edge.c1.x = 2 * vx - prev_c2.x
                 next_edge.c1.y = 2 * vy - prev_c2.y
                 prev_edge.c2.x = 2 * vx - next_edge.c1.x
                 prev_edge.c2.y = 2 * vy - next_edge.c1.y
 
-        # Case B: prev is Bezier, next is LINE — move the line endpoint (next_edge.v2)
+        # Case B: prev is Bezier, next is LINE — adjust straight-edge endpoint
         elif prev_is_bezier and not next_is_bezier:
             prev_c2 = prev_edge.c2
             pvx = vx - prev_c2.x
             pvy = vy - prev_c2.y
             prev_len = math.hypot(pvx, pvy)
 
-            if prev_len < 1e-8:
+            other = next_edge.v2
+            line_constraint = getattr(next_edge, 'constraint_type', ConstraintType.NONE)
+            constraint_val = getattr(next_edge, 'constraint_value', None)
+
+            if line_constraint != ConstraintType.NONE:
+                dir_unit, base_len = self._project_direction_to_constraint(
+                    vertex,
+                    other,
+                    (pvx, pvy),
+                    line_constraint,
+                    constraint_val,
+                )
+            else:
+                dir_unit, _ = self._normalize_vector((pvx, pvy))
+                if dir_unit is None:
+                    dir_unit, base_len = self._normalize_vector((other.x - vx, other.y - vy))
+                else:
+                    base_len = math.hypot(other.x - vx, other.y - vy)
+                if dir_unit is None:
+                    dir_unit = (1.0, 0.0)
+                if base_len < 1e-8:
+                    base_len = prev_len if prev_len > 1e-8 else 1.0
+
+            line_len = base_len
+            if cont == ContinuityType.G1:
+                if prev_len > 1e-8:
+                    prev_edge.c2.x = vx - dir_unit[0] * prev_len
+                    prev_edge.c2.y = vy - dir_unit[1] * prev_len
+            elif cont == ContinuityType.C1:
+                line_len = base_len if line_constraint == ConstraintType.FIXED_LENGTH else (prev_len if prev_len > 1e-8 else base_len)
+                prev_edge.c2.x = vx - dir_unit[0] * line_len
+                prev_edge.c2.y = vy - dir_unit[1] * line_len
+            else:
                 return
 
-            other = next_edge.v2
-            if cont == ContinuityType.G1:
-                ux = pvx / prev_len
-                uy = pvy / prev_len
-                # preserve current line length
-                l_len = math.hypot(other.x - vx, other.y - vy)
-                other.x = vx + ux * l_len
-                other.y = vy + uy * l_len
-            elif cont == ContinuityType.C1:
-                # set other so that (other - v) == (v - prev.c2)
-                other.x = 2 * vx - prev_c2.x
-                other.y = 2 * vy - prev_c2.y
+            other.x = vx + dir_unit[0] * line_len
+            other.y = vy + dir_unit[1] * line_len
+            moved_vertices.append(other)
 
-        # Case C: prev is LINE, next is Bezier — move the previous line vertex (prev_edge.v1)
+        # Case C: prev is LINE, next is Bezier — adjust previous-line vertex
         elif not prev_is_bezier and next_is_bezier:
             next_c1 = next_edge.c1
             nvx = next_c1.x - vx
             nvy = next_c1.y - vy
             next_len = math.hypot(nvx, nvy)
 
-            if next_len < 1e-8:
+            other = prev_edge.v1
+            line_constraint = getattr(prev_edge, 'constraint_type', ConstraintType.NONE)
+            constraint_val = getattr(prev_edge, 'constraint_value', None)
+            desired_dir = (-nvx, -nvy)
+
+            if line_constraint != ConstraintType.NONE:
+                dir_unit, base_len = self._project_direction_to_constraint(
+                    vertex,
+                    other,
+                    desired_dir,
+                    line_constraint,
+                    constraint_val,
+                )
+            else:
+                dir_unit, _ = self._normalize_vector(desired_dir)
+                if dir_unit is None:
+                    dir_unit, base_len = self._normalize_vector((other.x - vx, other.y - vy))
+                else:
+                    base_len = math.hypot(other.x - vx, other.y - vy)
+                if dir_unit is None:
+                    dir_unit = (-1.0, 0.0)
+                if base_len < 1e-8:
+                    base_len = next_len if next_len > 1e-8 else 1.0
+
+            line_len = base_len
+            if cont == ContinuityType.G1:
+                if next_len > 1e-8:
+                    next_edge.c1.x = vx - dir_unit[0] * next_len
+                    next_edge.c1.y = vy - dir_unit[1] * next_len
+            elif cont == ContinuityType.C1:
+                line_len = base_len if line_constraint == ConstraintType.FIXED_LENGTH else (next_len if next_len > 1e-8 else base_len)
+                next_edge.c1.x = vx - dir_unit[0] * line_len
+                next_edge.c1.y = vy - dir_unit[1] * line_len
+            else:
                 return
 
-            other = prev_edge.v1
-            if cont == ContinuityType.G1:
-                ux = nvx / next_len
-                uy = nvy / next_len
-                # preserve current line length
-                l_len = math.hypot(vx - other.x, vy - other.y)
-                other.x = vx - ux * l_len
-                other.y = vy - uy * l_len
-            elif cont == ContinuityType.C1:
-                # set other so that (v - other) == (next.c1 - v)
-                other.x = 2 * vx - next_c1.x
-                other.y = 2 * vy - next_c1.y
+            other.x = vx + dir_unit[0] * line_len
+            other.y = vy + dir_unit[1] * line_len
+            moved_vertices.append(other)
 
         # Update visuals: edges and vertex positions
         try:
-            # update affected edges
             self.edge_items[prev_idx].update_edge()
             self.edge_items[next_idx].update_edge()
         except Exception:
             pass
 
-        # If we moved any vertex coordinates (mixed cases) update vertex items
         try:
             self.updating_from_parent = True
             for v, v_item in self.vertex_items.items():
@@ -621,14 +714,8 @@ class PolygonItem(QGraphicsItem):
         finally:
             self.updating_from_parent = False
 
-        # try:
-        #     for v in self.polygon.vertices:
-        #         if getattr(v, 'continuity', None) is not None and v.continuity != ContinuityType.G0:
-        #             self.enforce_vertex_continuity_from_vertex(v)
-        # except Exception:
-        #     pass
-
-        self.on_vertex_moved(other, QPointF(other.x, other.y))
+        for moved in moved_vertices:
+            self.on_vertex_moved(moved, QPointF(moved.x, moved.y))
 
         try:
             self.update()
