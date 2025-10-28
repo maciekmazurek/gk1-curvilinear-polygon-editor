@@ -1,8 +1,9 @@
-from model import Vertex
+from model import Vertex, ContinuityType
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
     QMenu,
+    QMessageBox,
 )
 from PySide6.QtGui import (
     QBrush,
@@ -37,6 +38,9 @@ class VertexItem(QGraphicsEllipseItem):
     def contextMenuEvent(self, event):
         menu = QMenu()
         del_action = menu.addAction("Delete vertex")
+        set_g0_action = menu.addAction("Set continuity: G0")
+        set_g1_action = menu.addAction("Set continuity: G1")
+        set_c1_action = menu.addAction("Set continuity: C1")
         sp = event.screenPos()
         try:
             qp = sp.toPoint()
@@ -47,4 +51,15 @@ class VertexItem(QGraphicsEllipseItem):
             parent = self.parentItem()
             if parent:
                 parent.delete_vertex(self.vertex)
+        elif chosen_action in (set_g0_action, set_g1_action, set_c1_action):
+            parent = self.parentItem()
+            if parent:
+                if chosen_action is set_g0_action:
+                    ok = parent.apply_continuity_to_vertex(self.vertex, ContinuityType.G0)
+                elif chosen_action is set_g1_action:
+                    ok = parent.apply_continuity_to_vertex(self.vertex, ContinuityType.G1)
+                else:
+                    ok = parent.apply_continuity_to_vertex(self.vertex, ContinuityType.C1)
+                if not ok:
+                    QMessageBox.warning(None, "Continuity", "Continuity can only be set if at least one adjacent edge is Bezier.")
         event.accept()

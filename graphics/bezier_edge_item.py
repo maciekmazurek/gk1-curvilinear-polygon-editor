@@ -58,6 +58,16 @@ class BezierEdgeItem(EdgeItem):
         # update caches / redraw
         self.update_edge()
         self.update()
+
+        parent = self.parentItem()
+        if parent:
+            if control_vertex is self.edge.c1:
+                parent.enforce_vertex_continuity_from_control(self.edge.v1)
+            elif control_vertex is self.edge.c2:
+                parent.enforce_vertex_continuity_from_control(self.edge.v2)
+            for e_item in parent.edge_items:
+                    e_item.update_edge()
+            parent.update()
     
     def update_edge(self):
         # Convert scene coords to local parent coords

@@ -12,6 +12,12 @@ class ConstraintType(Enum):
     DIAGONAL_45 = 2
     FIXED_LENGTH = 3
 
+
+class ContinuityType(Enum):
+    G0 = 0
+    G1 = 1
+    C1 = 2
+
 class LineDrawingMode(Enum):
     QGRAPHICS = 1
     BRESENHAM = 2
@@ -21,6 +27,7 @@ class Vertex:
         self.x = x
         self.y = y
         self.radius = VERTEX_DIAMETER / 2
+        self.continuity: ContinuityType = ContinuityType.G0
 
 class Edge:
     def __init__(self, v1: Vertex, v2: Vertex, type: EdgeType = EdgeType.LINE):

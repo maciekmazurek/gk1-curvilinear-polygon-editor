@@ -265,7 +265,7 @@ class PolygonItem(QGraphicsItem):
                     break
                 v1 = self.polygon.vertices[i]
                 v2 = self.polygon.vertices[j]
-                continue_propagation = self._relax_edge_constraint(v1, v2)
+                continue_propagation = self._enforce_edge_constraint(v1, v2)
                 if not continue_propagation:
                     break
                 i = j
@@ -278,7 +278,7 @@ class PolygonItem(QGraphicsItem):
                     break
                 v1 = self.polygon.vertices[i]
                 v2 = self.polygon.vertices[j]
-                continue_propagation = self._relax_edge_constraint(v1, v2)
+                continue_propagation = self._enforce_edge_constraint(v1, v2)
                 if not continue_propagation:
                     break
                 i = j
@@ -294,9 +294,17 @@ class PolygonItem(QGraphicsItem):
         finally:
             self.updating_from_parent = False
 
+        # Enforce continuity constraints for any vertices that requested it
+        try:
+            for v in self.polygon.vertices:
+                if getattr(v, 'continuity', None) is not None and v.continuity != ContinuityType.G0:
+                    self.enforce_vertex_continuity_from_vertex(v)
+        except Exception:
+            pass
+
         self.update()
 
-    def _relax_edge_constraint(self, v1: Vertex, v2: Vertex) -> bool:
+    def _enforce_edge_constraint(self, v1: Vertex, v2: Vertex) -> bool:
         current_edge = self._edge_between(v1, v2)
         # If we couldn't find an edge connecting v1 and v2, stop propagation
         if current_edge is None:
@@ -330,6 +338,300 @@ class PolygonItem(QGraphicsItem):
             return False
 
         return True
+
+    def _adjacent_edges_of_vertex(self, vertex: Vertex):
+        if vertex not in self.polygon.vertices:
+            return (None, None, None, None)
+        n = len(self.polygon.vertices)
+        if n == 0:
+            return (None, None, None, None)
+        idx = self.polygon.vertices.index(vertex)
+        prev_idx = (idx - 1) % n
+        next_idx = idx
+        prev_edge = self.polygon.edges[prev_idx]
+        next_edge = self.polygon.edges[next_idx]
+        return (prev_edge, prev_idx, next_edge, next_idx)
+
+    def apply_continuity_to_vertex(self, vertex: Vertex, continuity: ContinuityType) -> bool:
+        # Applicable when at least one adjacent edge is Bezier
+        prev_edge, prev_idx, next_edge, next_idx = self._adjacent_edges_of_vertex(vertex)
+        if prev_edge is None or next_edge is None:
+            return False
+        if not (getattr(prev_edge, 'type', None) == EdgeType.BEZIER or getattr(next_edge, 'type', None) == EdgeType.BEZIER):
+            return False
+        # Set continuity on the vertex and enforce immediately
+        vertex.continuity = continuity
+        self.enforce_vertex_continuity_from_vertex(vertex)
+        # Update visuals for affected edges
+        try:
+            self.edge_items[prev_idx].update_edge()
+            self.edge_items[next_idx].update_edge()
+            self.update()
+        except Exception:
+            pass
+        return True
+    
+    # Metoda wywoływana przez _on_vertex_moved oraz apply_continuity_to_vertex.
+    # Modyfikuje punkt kontrolny krzywej beziera związanej z wierzchołkiem, tak,
+    # aby zachować przypisaną ciągłość dla tego wierzchołka (modyfikujemy tylko
+    # pozycję punktu kontrolnego)
+    def enforce_vertex_continuity_from_vertex(self, vertex: Vertex) -> None:
+        prev_edge, prev_idx, next_edge, next_idx = self._adjacent_edges_of_vertex(vertex)
+        if prev_edge is None or next_edge is None:
+            return
+
+        cont = getattr(vertex, 'continuity', None)
+        if cont is None or cont == ContinuityType.G0:
+            return
+
+        # Coordinates
+        vx = vertex.x
+        vy = vertex.y
+
+        prev_is_bezier = getattr(prev_edge, 'type', None) == EdgeType.BEZIER
+        next_is_bezier = getattr(next_edge, 'type', None) == EdgeType.BEZIER
+
+        import math
+
+        # Case A: both Bezier (existing behavior)
+        if prev_is_bezier and next_is_bezier:
+            prev_c2 = prev_edge.c2
+            next_c1 = next_edge.c1
+
+            pvx = vx - prev_c2.x
+            pvy = vy - prev_c2.y
+            prev_len = math.hypot(pvx, pvy)
+            nvx = next_c1.x - vx
+            nvy = next_c1.y - vy
+            next_len = math.hypot(nvx, nvy)
+
+            if cont == ContinuityType.G1:
+                # align unit tangent vectors; preserve handle lengths
+                if prev_len > 1e-8:
+                    ux = pvx / prev_len
+                    uy = pvy / prev_len
+                    # set next.c1 to point in same direction with its original length
+                    next_edge.c1.x = vx + ux * next_len
+                    next_edge.c1.y = vy + uy * next_len
+                    # ensure prev control is aligned too (snap to exact opposite direction preserving length)
+                    prev_edge.c2.x = vx - ux * prev_len
+                    prev_edge.c2.y = vy - uy * prev_len
+                elif next_len > 1e-8:
+                    ux = nvx / next_len
+                    uy = nvy / next_len
+                    prev_edge.c2.x = vx - ux * prev_len
+                    prev_edge.c2.y = vy - uy * prev_len
+            elif cont == ContinuityType.C1:
+                # enforce equality of tangent vectors: (v - prev.c2) == (next.c1 - v)
+                next_edge.c1.x = 2 * vx - prev_c2.x
+                next_edge.c1.y = 2 * vy - prev_c2.y
+                prev_edge.c2.x = 2 * vx - next_edge.c1.x
+                prev_edge.c2.y = 2 * vy - next_edge.c1.y
+
+        # Case B: prev is Bezier, next is LINE
+        elif prev_is_bezier and not next_is_bezier:
+            # line tangent at v is (next_edge.v2 - v)
+            other = next_edge.v2
+            lvx = other.x - vx
+            lvy = other.y - vy
+            l_len = math.hypot(lvx, lvy)
+            prev_c2 = prev_edge.c2
+            pvx = vx - prev_c2.x
+            pvy = vy - prev_c2.y
+            prev_len = math.hypot(pvx, pvy)
+
+            if l_len < 1e-8:
+                return
+
+            if cont == ContinuityType.G1:
+                ux = lvx / l_len
+                uy = lvy / l_len
+                # align prev handle direction with line direction, preserve prev handle length
+                prev_edge.c2.x = vx - ux * prev_len
+                prev_edge.c2.y = vy - uy * prev_len
+            elif cont == ContinuityType.C1:
+                # set prev.c2 so that (v - prev.c2) == (other - v)
+                prev_edge.c2.x = vx - lvx
+                prev_edge.c2.y = vy - lvy
+
+        # Case C: prev is LINE, next is Bezier
+        elif not prev_is_bezier and next_is_bezier:
+            # line tangent at v is (v - prev_edge.v1)
+            other = prev_edge.v1
+            lvx = vx - other.x
+            lvy = vy - other.y
+            l_len = math.hypot(lvx, lvy)
+            next_c1 = next_edge.c1
+            nvx = next_c1.x - vx
+            nvy = next_c1.y - vy
+            next_len = math.hypot(nvx, nvy)
+
+            if l_len < 1e-8:
+                return
+
+            if cont == ContinuityType.G1:
+                ux = lvx / l_len
+                uy = lvy / l_len
+                # align next handle direction with line direction, preserve next handle length
+                next_edge.c1.x = vx + ux * next_len
+                next_edge.c1.y = vy + uy * next_len
+            elif cont == ContinuityType.C1:
+                # set next.c1 so that (next.c1 - v) == (v - other)
+                next_edge.c1.x = vx + lvx
+                next_edge.c1.y = vy + lvy
+
+        # else: both not Bezier (shouldn't happen due to apply check)
+
+        # After modifications, update visuals of affected edge items
+        try:
+            self.edge_items[prev_idx].update_edge()
+            self.edge_items[next_idx].update_edge()
+            self.update()
+        except Exception:
+            pass
+    
+    # Metoda wywoływana przez on_control_moved w BezierEdgeItem. Modyfikuje 
+    # wierzchołek sąsiadujący z wierzchołkiem vertex po przesunięciu punktu
+    # kontrolnego krzywej beziera związanego z wierzchołkiem vertex, tak aby zachować ciągłość
+    # przypisaną do wierzchołka vertex (modyfikujemy tylko pozycję wierzchołka 
+    # sąsiadującego z vertex, z którym tworzy zwykłą krawędź)
+    def enforce_vertex_continuity_from_control(self, vertex: Vertex):
+        """Called when a bezier control handle adjacent to `vertex` moved.
+        Adjusts the neighbor geometry so the requested continuity at `vertex`
+        is preserved. Behavior mirrors `enforce_vertex_continuity_from_vertex`.
+
+        For both-bezier joins we adjust the opposite control to match the
+        moved handle (G1 preserves direction/length relationships, C1 enforces
+        exact tangent equality). For mixed Bezier/Line joins we modify the
+        neighbouring vertex that forms the straight edge so the line tangent
+        matches the bezier tangent (for G1 we preserve the line length; for
+        C1 we set the line tangent equal exactly).
+        """
+        prev_edge, prev_idx, next_edge, next_idx = self._adjacent_edges_of_vertex(vertex)
+        if prev_edge is None or next_edge is None:
+            return
+
+        cont = getattr(vertex, 'continuity', None)
+        if cont is None or cont == ContinuityType.G0:
+            return
+
+        vx = vertex.x
+        vy = vertex.y
+
+        prev_is_bezier = getattr(prev_edge, 'type', None) == EdgeType.BEZIER
+        next_is_bezier = getattr(next_edge, 'type', None) == EdgeType.BEZIER
+
+        import math
+
+        # Case A: both Bezier — decide which handle to treat as the source
+        # (the one that was moved will typically have non-zero length)
+        if prev_is_bezier and next_is_bezier:
+            prev_c2 = prev_edge.c2
+            next_c1 = next_edge.c1
+
+            pvx = vx - prev_c2.x
+            pvy = vy - prev_c2.y
+            prev_len = math.hypot(pvx, pvy)
+            nvx = next_c1.x - vx
+            nvy = next_c1.y - vy
+            next_len = math.hypot(nvx, nvy)
+
+            if cont == ContinuityType.G1:
+                if prev_len > 1e-8:
+                    ux = pvx / prev_len
+                    uy = pvy / prev_len
+                    # move next.c1 to be in same direction, preserve its length
+                    next_edge.c1.x = vx + ux * next_len
+                    next_edge.c1.y = vy + uy * next_len
+                    # snap prev.c2 to exact opposite direction/length
+                    prev_edge.c2.x = vx - ux * prev_len
+                    prev_edge.c2.y = vy - uy * prev_len
+                elif next_len > 1e-8:
+                    ux = nvx / next_len
+                    uy = nvy / next_len
+                    prev_edge.c2.x = vx - ux * prev_len
+                    prev_edge.c2.y = vy - uy * prev_len
+            elif cont == ContinuityType.C1:
+                # enforce equality of tangent vectors
+                next_edge.c1.x = 2 * vx - prev_c2.x
+                next_edge.c1.y = 2 * vy - prev_c2.y
+                prev_edge.c2.x = 2 * vx - next_edge.c1.x
+                prev_edge.c2.y = 2 * vy - next_edge.c1.y
+
+        # Case B: prev is Bezier, next is LINE — move the line endpoint (next_edge.v2)
+        elif prev_is_bezier and not next_is_bezier:
+            prev_c2 = prev_edge.c2
+            pvx = vx - prev_c2.x
+            pvy = vy - prev_c2.y
+            prev_len = math.hypot(pvx, pvy)
+
+            if prev_len < 1e-8:
+                return
+
+            other = next_edge.v2
+            if cont == ContinuityType.G1:
+                ux = pvx / prev_len
+                uy = pvy / prev_len
+                # preserve current line length
+                l_len = math.hypot(other.x - vx, other.y - vy)
+                other.x = vx + ux * l_len
+                other.y = vy + uy * l_len
+            elif cont == ContinuityType.C1:
+                # set other so that (other - v) == (v - prev.c2)
+                other.x = 2 * vx - prev_c2.x
+                other.y = 2 * vy - prev_c2.y
+
+        # Case C: prev is LINE, next is Bezier — move the previous line vertex (prev_edge.v1)
+        elif not prev_is_bezier and next_is_bezier:
+            next_c1 = next_edge.c1
+            nvx = next_c1.x - vx
+            nvy = next_c1.y - vy
+            next_len = math.hypot(nvx, nvy)
+
+            if next_len < 1e-8:
+                return
+
+            other = prev_edge.v1
+            if cont == ContinuityType.G1:
+                ux = nvx / next_len
+                uy = nvy / next_len
+                # preserve current line length
+                l_len = math.hypot(vx - other.x, vy - other.y)
+                other.x = vx - ux * l_len
+                other.y = vy - uy * l_len
+            elif cont == ContinuityType.C1:
+                # set other so that (v - other) == (next.c1 - v)
+                other.x = 2 * vx - next_c1.x
+                other.y = 2 * vy - next_c1.y
+
+        # Update visuals: edges and vertex positions
+        try:
+            # update affected edges
+            self.edge_items[prev_idx].update_edge()
+            self.edge_items[next_idx].update_edge()
+        except Exception:
+            pass
+
+        # If we moved any vertex coordinates (mixed cases) update vertex items
+        try:
+            self.updating_from_parent = True
+            for v, v_item in self.vertex_items.items():
+                vertex_parent_coords = self.mapFromScene(QPointF(v.x, v.y))
+                v_item.setPos(vertex_parent_coords)
+        finally:
+            self.updating_from_parent = False
+
+        try:
+            for v in self.polygon.vertices:
+                if getattr(v, 'continuity', None) is not None and v.continuity != ContinuityType.G0:
+                    self.enforce_vertex_continuity_from_vertex(v)
+        except Exception:
+            pass
+
+        try:
+            self.update()
+        except Exception:
+            pass
 
     # Method called by LineEdgeItem when user wants to create new vertex
     def add_vertex_on_edge(self, edge: Edge):
