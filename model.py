@@ -47,8 +47,16 @@ class Polygon:
         self.create()
             
     def create(self):
+        # self.vertices = [Vertex(-20, 60), Vertex(50, -30), Vertex(200, 40)]
+        # self.edges = [Bezier(self.vertices[0], self.vertices[1], Vertex(-50, 20), Vertex(0, -70)),
+        #               Edge(self.vertices[1], self.vertices[2]),
+        #               Edge(self.vertices[2], self.vertices[0])]
+        # for edge in self.edges:
+        #     self.edges_dict[(edge.v1, edge.v2)] = edge
+        #     self.edges_dict[(edge.v2, edge.v1)] = edge
+
         self.vertices = [Vertex(-20, 60), Vertex(50, -30), Vertex(200, 40)]
-        self.edges = [Bezier(self.vertices[0], self.vertices[1], Vertex(-50, 20), Vertex(0, -70)),
+        self.edges = [Arc(self.vertices[0], self.vertices[1]),
                       Edge(self.vertices[1], self.vertices[2]),
                       Edge(self.vertices[2], self.vertices[0])]
         for edge in self.edges:
@@ -60,3 +68,7 @@ class Bezier(Edge):
         super().__init__(v1, v2, EdgeType.BEZIER)
         self.c1 = c1 # First control point
         self.c2 = c2 # Second control point
+
+class Arc(Edge):
+    def __init__(self, v1: Vertex, v2: Vertex):
+        super().__init__(v1, v2, EdgeType.ARC)

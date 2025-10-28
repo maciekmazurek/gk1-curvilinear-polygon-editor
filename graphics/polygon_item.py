@@ -2,6 +2,7 @@ from model import *
 from graphics.vertex_item import VertexItem
 from graphics.line_edge_item import StandardLineEdgeItem, BresenhamLineEdgeItem
 from graphics.bezier_edge_item import BezierEdgeItem
+from graphics.arc_edge_item import ArcEdgeItem
 from PySide6.QtWidgets import QGraphicsItem
 from PySide6.QtGui import (
     QColor,
@@ -89,7 +90,8 @@ class PolygonItem(QGraphicsItem):
         start = self.mapFromScene(QPointF(first_edge.v1.x, first_edge.v1.y))
         path.moveTo(start)
 
-        for e in self.polygon.edges:
+        n_edges = len(self.polygon.edges)
+        for idx, e in enumerate(self.polygon.edges):
             if getattr(e, "type", None) == EdgeType.LINE:
                 p2 = self.mapFromScene(QPointF(e.v2.x, e.v2.y))
                 path.lineTo(p2)
@@ -99,6 +101,140 @@ class PolygonItem(QGraphicsItem):
                 c2 = self.mapFromScene(QPointF(e.c2.x, e.c2.y))
                 p3 = self.mapFromScene(QPointF(e.v2.x, e.v2.y))
                 path.cubicTo(c1, c2, p3)
+            elif getattr(e, "type", None) == EdgeType.ARC:
+                # approximate the circular arc with a polyline so the polygon
+                # shape uses the true arc boundary (not the chord)
+                import math
+
+                def unit(x, y):
+                    l = math.hypot(x, y)
+                    if l < 1e-8:
+                        return (None, 0.0)
+                    return ((x / l, y / l), l)
+
+                def rot90_ccw(vx, vy):
+                    return (-vy, vx)
+
+                # neighbour-based tangent at a vertex (scene coords)
+                def tangent_at_vertex(vertex, at_v1: bool):
+                    # for v1, neighbour is previous edge; for v2, neighbour is this edge's next
+                    if at_v1:
+                        ne = self.polygon.edges[(idx - 1) % n_edges]
+                        if ne.v2 is vertex:
+                            vx = vertex.x - ne.v1.x
+                            vy = vertex.y - ne.v1.y
+                        else:
+                            vx = ne.v2.x - vertex.x
+                            vy = ne.v2.y - vertex.y
+                        if getattr(ne, 'type', None) == EdgeType.BEZIER:
+                            try:
+                                vx = vertex.x - ne.c2.x
+                                vy = vertex.y - ne.c2.y
+                            except Exception:
+                                pass
+                    else:
+                        ne = self.polygon.edges[idx]
+                        if ne.v1 is vertex:
+                            vx = ne.v2.x - vertex.x
+                            vy = ne.v2.y - vertex.y
+                        else:
+                            vx = vertex.x - ne.v1.x
+                            vy = vertex.y - ne.v1.y
+                        if getattr(ne, 'type', None) == EdgeType.BEZIER:
+                            try:
+                                vx = ne.c1.x - vertex.x
+                                vy = ne.c1.y - vertex.y
+                            except Exception:
+                                pass
+                    u, _ = unit(vx, vy)
+                    return u
+
+                v1 = e.v1; v2 = e.v2
+                x1, y1 = v1.x, v1.y
+                x2, y2 = v2.x, v2.y
+                chord_u, chord_len = unit(x2 - x1, y2 - y1)
+                if chord_u is None or chord_len < 1e-6:
+                    # degenerate -> straight segment
+                    p2 = self.mapFromScene(QPointF(e.v2.x, e.v2.y))
+                    path.lineTo(p2)
+                else:
+                    # compute circle geometry consistent with ArcEdgeItem
+                    g1_v1 = getattr(v1, 'continuity', None) and v1.continuity.name == 'G1'
+                    g1_v2 = getattr(v2, 'continuity', None) and v2.continuity.name == 'G1'
+                    if g1_v1 and g1_v2:
+                        g1_v2 = False
+
+                    Mx = (x1 + x2) * 0.5
+                    My = (y1 + y2) * 0.5
+                    ncx, ncy = rot90_ccw(*chord_u)
+
+                    Cx, Cy = Mx, My
+                    R = chord_len * 0.5
+                    prefer_ccw = True
+
+                    if g1_v1 or g1_v2:
+                        if g1_v1:
+                            t = tangent_at_vertex(v1, at_v1=True)
+                            Px, Py = x1, y1
+                        else:
+                            t = tangent_at_vertex(v2, at_v1=False)
+                            Px, Py = x2, y2
+                        if t is not None:
+                            ntx, nty = rot90_ccw(*t)
+                            mx = Mx - Px
+                            my = My - Py
+                            det = ntx * (-ncy) - nty * (-ncx)
+                            if abs(det) > 1e-8:
+                                s = (mx * (-ncy) - my * (-ncx)) / det
+                                Cx = Px + s * ntx
+                                Cy = Py + s * nty
+                                R = math.hypot(Px - Cx, Py - Cy)
+                                rx = Px - Cx
+                                ry = Py - Cy
+                                r_u, _ = unit(rx, ry)
+                                if r_u is not None:
+                                    # pick orientation so tangent at endpoint matches
+                                    tx_ccw_x, tx_ccw_y = rot90_ccw(*r_u)
+                                    tx_cw_x, tx_cw_y = (r_u[1], -r_u[0])
+                                    dot_ccw = tx_ccw_x * t[0] + tx_ccw_y * t[1]
+                                    dot_cw = tx_cw_x * t[0] + tx_cw_y * t[1]
+                                    prefer_ccw = dot_ccw >= dot_cw
+
+                    a1 = math.atan2(y1 - Cy, x1 - Cx)
+                    a2 = math.atan2(y2 - Cy, x2 - Cx)
+
+                    def norm(a):
+                        while a < 0:
+                            a += 2 * math.pi
+                        while a >= 2 * math.pi:
+                            a -= 2 * math.pi
+                        return a
+
+                    a1n = norm(a1)
+                    a2n = norm(a2)
+                    if prefer_ccw:
+                        sweep = a2n - a1n
+                        if sweep <= 0:
+                            sweep += 2 * math.pi
+                        sign = 1.0
+                    else:
+                        sweep = a1n - a2n
+                        if sweep <= 0:
+                            sweep += 2 * math.pi
+                        sweep = -sweep
+                        sign = -1.0
+
+                    total_angle = abs(sweep)
+                    samples = max(int(R * total_angle * 1.5), 24)
+                    samples = min(samples, 1024)
+                    dt = total_angle / samples if samples > 0 else total_angle
+
+                    for i in range(1, samples + 1):
+                        a = a1 + sign * dt * i
+                        sx = Cx + R * math.cos(a)
+                        sy = Cy + R * math.sin(a)
+                        p = self.mapFromScene(QPointF(sx, sy))
+                        path.lineTo(p)
             else:
                 # fallback to straight line
                 p2 = self.mapFromScene(QPointF(e.v2.x, e.v2.y))
@@ -249,6 +385,8 @@ class PolygonItem(QGraphicsItem):
                 return BresenhamLineEdgeItem(edge, parent)
         elif edge.type == EdgeType.BEZIER:
             return BezierEdgeItem(edge, parent)
+        elif edge.type == EdgeType.ARC:
+            return ArcEdgeItem(edge, parent)
 
     # Method called by VertexItem when user directly drags a single vertex
     def on_vertex_moved(self, vertex: Vertex, vertex_new_scene_coords: QPointF):
