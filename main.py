@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import QApplication, QMainWindow, QGraphicsScene
 from ui.MainWindow import Ui_MainWindow
 from polygon_renderer import PolygonRenderer
-from model.model import LineDrawingMode
+from model import LineDrawingMode
 
 import sys
 
