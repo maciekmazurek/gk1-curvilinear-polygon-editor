@@ -12,7 +12,6 @@ class ConstraintType(Enum):
     DIAGONAL_45 = 2
     FIXED_LENGTH = 3
 
-
 class ContinuityType(Enum):
     G0 = 0
     G1 = 1
@@ -26,7 +25,6 @@ class Vertex:
     def __init__(self, x: float, y: float):
         self.x = x
         self.y = y
-        self.radius = VERTEX_DIAMETER / 2
         self.continuity: ContinuityType = ContinuityType.G0
 
 class Edge:

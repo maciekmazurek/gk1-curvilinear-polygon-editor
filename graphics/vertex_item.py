@@ -1,4 +1,5 @@
 from model import Vertex, ContinuityType, EdgeType
+from config import VERTEX_DIAMETER
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -13,8 +14,8 @@ from PySide6.QtGui import (
 class VertexItem(QGraphicsEllipseItem):
     def __init__(self, vertex : Vertex, parent=None):
         # We call the constructor of the base class to create an ellipse item
-        super().__init__(-vertex.radius, -vertex.radius, 
-                         vertex.radius*2, vertex.radius*2, parent)
+        super().__init__(-VERTEX_DIAMETER/2, -VERTEX_DIAMETER/2, 
+                         VERTEX_DIAMETER, VERTEX_DIAMETER, parent)
         self.vertex = vertex
         self.setBrush(QBrush(QColor("black")))
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
