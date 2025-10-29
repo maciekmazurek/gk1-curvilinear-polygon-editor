@@ -1,6 +1,7 @@
 from model import Bezier, EdgeType, Vertex
 from graphics.control_point_item import ControlPointItem
 from graphics.edge_item import EdgeItem
+from PySide6.QtWidgets import QMenu
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -33,6 +34,22 @@ class BezierEdgeItem(EdgeItem):
         self._place_control_handles()
         self.update_edge()
 
+    def contextMenuEvent(self, event):
+        # Only conversion back to Line is offered for Bezier edges
+        menu = QMenu()
+        to_line_action = menu.addAction("Convert to Line")
+        sp = event.screenPos()
+        try:
+            qp = sp.toPoint()
+        except Exception:
+            qp = sp
+        chosen = menu.exec(qp)
+        if chosen == to_line_action:
+            parent = self.parentItem()
+            if parent:
+                parent.convert_edge_to_line(self.edge)
+        event.accept()
+
     def convert_coords_to_parent(self):
         p0 = self.mapFromScene(QPointF(self.edge.v1.x, self.edge.v1.y))
         p1 = self.mapFromScene(QPointF(self.edge.c1.x, self.edge.c1.y))
@@ -61,10 +78,11 @@ class BezierEdgeItem(EdgeItem):
 
         parent = self.parentItem()
         if parent:
+            # Inform parent which control moved so the moved handle remains the driver
             if control_vertex is self.edge.c1:
-                parent.enforce_vertex_continuity_from_control(self.edge.v1)
+                parent.enforce_vertex_continuity_from_control(self.edge.v1, moved_control='next')
             elif control_vertex is self.edge.c2:
-                parent.enforce_vertex_continuity_from_control(self.edge.v2)
+                parent.enforce_vertex_continuity_from_control(self.edge.v2, moved_control='prev')
             for e_item in parent.edge_items:
                     e_item.update_edge()
             parent.update()

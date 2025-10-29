@@ -40,10 +40,14 @@ class LineEdgeItem(EdgeItem):
     def contextMenuEvent(self, event):
         menu = QMenu()
         add_vertex_action = menu.addAction("Add new vertex")
+        menu.addSeparator()
         set_vertical_action = menu.addAction("Set constraint: Vertical")
         set_45_action = menu.addAction("Set constraint: 45°")
         set_length_action = menu.addAction("Set constraint: Fixed length...")
         clear_constraint_action = menu.addAction("Clear constraint")
+        menu.addSeparator()
+        to_bezier_action = menu.addAction("Convert to Bezier")
+        to_arc_action = menu.addAction("Convert to Arc")
 
         # Converting screenPos from QPointF to QPoint so we can pass it to
         # menu.exec()
@@ -76,6 +80,12 @@ class LineEdgeItem(EdgeItem):
         elif chosen_action == clear_constraint_action:
             if parent:
                 parent.apply_constraint_to_edge(self.edge, ConstraintType.NONE, None)
+        elif chosen_action == to_bezier_action:
+            if parent:
+                parent.convert_edge_to_bezier(self.edge)
+        elif chosen_action == to_arc_action:
+            if parent:
+                parent.convert_edge_to_arc(self.edge)
 
         event.accept()
 

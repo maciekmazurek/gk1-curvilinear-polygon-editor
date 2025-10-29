@@ -1,5 +1,6 @@
 from model import Arc, EdgeType, Vertex
 from graphics.edge_item import EdgeItem
+from PySide6.QtWidgets import QMenu
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -42,6 +43,22 @@ class ArcEdgeItem(EdgeItem):
 
         self.update_edge()
 
+    def contextMenuEvent(self, event):
+        # Only conversion back to Line is offered for Arc edges
+        menu = QMenu()
+        to_line_action = menu.addAction("Convert to Line")
+        sp = event.screenPos()
+        try:
+            qp = sp.toPoint()
+        except Exception:
+            qp = sp
+        chosen = menu.exec(qp)
+        if chosen == to_line_action:
+            parent = self.parentItem()
+            if parent:
+                parent.convert_edge_to_line(self.edge)
+        event.accept()
+
     def convert_coords_to_parent(self):
         p0 = self.mapFromScene(QPointF(self.edge.v1.x, self.edge.v1.y))
         p3 = self.mapFromScene(QPointF(self.edge.v2.x, self.edge.v2.y))
@@ -71,8 +88,10 @@ class ArcEdgeItem(EdgeItem):
             return (None, None, None, None)
         n = len(edges)
         prev_edge = edges[(idx - 1) % n]
-        next_edge = edges[idx]
-        return (prev_edge, (idx - 1) % n, next_edge, idx)
+        # For the arc's v2, the neighbour is the edge AFTER this arc,
+        # not the arc itself. Use idx+1 as the 'next' neighbour.
+        next_edge = edges[(idx + 1) % n]
+        return (prev_edge, (idx - 1) % n, next_edge, (idx + 1) % n)
 
     def _tangent_at_vertex_from_neighbour(self, vertex: Vertex, at_v1: bool):
         prev_edge, _, next_edge, _ = self._neighbour_edges()
@@ -81,6 +100,23 @@ class ArcEdgeItem(EdgeItem):
         # For v1, neighbour is prev_edge (ending at v1). For v2, neighbour is next_edge (starting at v2)
         if at_v1:
             e = prev_edge
+            # Special case: vertex is adjacent to two arcs and asks for G1 -> use bisector tangent
+            if getattr(e, 'type', None) == EdgeType.ARC and getattr(self.edge.v1, 'continuity', None) and self.edge.v1.continuity.name == 'G1':
+                # incoming along prev arc chord into vertex
+                if e.v2 is vertex:
+                    inx = vertex.x - e.v1.x; iny = vertex.y - e.v1.y
+                else:
+                    inx = vertex.x - e.v2.x; iny = vertex.y - e.v2.y
+                # outgoing along this arc chord from vertex to v2
+                outx = self.edge.v2.x - vertex.x; outy = self.edge.v2.y - vertex.y
+                u_in, _ = self._unit(inx, iny)
+                u_out, _ = self._unit(outx, outy)
+                if u_in is not None and u_out is not None:
+                    bx = u_in[0] + u_out[0]; by = u_in[1] + u_out[1]
+                    u_b, _ = self._unit(bx, by)
+                    if u_b is None:
+                        return u_out
+                    return u_b
             if e.v1 is vertex and e.v2 is vertex:
                 return None
             if e.v2 is vertex:
@@ -100,6 +136,23 @@ class ArcEdgeItem(EdgeItem):
                     pass
         else:
             e = next_edge
+            # Special case: vertex is adjacent to two arcs and asks for G1 -> use bisector tangent
+            if getattr(e, 'type', None) == EdgeType.ARC and getattr(self.edge.v2, 'continuity', None) and self.edge.v2.continuity.name == 'G1':
+                # incoming along this arc chord into vertex (from v1)
+                inx = vertex.x - self.edge.v1.x; iny = vertex.y - self.edge.v1.y
+                # outgoing along next arc chord from vertex
+                if e.v1 is vertex:
+                    outx = e.v2.x - vertex.x; outy = e.v2.y - vertex.y
+                else:
+                    outx = e.v1.x - vertex.x; outy = e.v1.y - vertex.y
+                u_in, _ = self._unit(inx, iny)
+                u_out, _ = self._unit(outx, outy)
+                if u_in is not None and u_out is not None:
+                    bx = u_in[0] + u_out[0]; by = u_in[1] + u_out[1]
+                    u_b, _ = self._unit(bx, by)
+                    if u_b is None:
+                        return u_out
+                    return u_b
             if e.v1 is vertex:
                 vx = e.v2.x - vertex.x
                 vy = e.v2.y - vertex.y
