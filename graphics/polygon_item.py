@@ -446,13 +446,28 @@ class PolygonItem(QGraphicsItem):
                 v2.x = v1.x + dx * scale
                 v2.y = v1.y + dy * scale
         elif current_edge.constraint_type == ConstraintType.DIAGONAL_45:
+            # Project direction to nearest 45° while preserving current Euclidean length
             dx = v2.x - v1.x
             dy = v2.y - v1.y
-            sx = 1 if dx >= 0 else -1
-            sy = 1 if dy >= 0 else -1
-            mag = max(abs(dx), abs(dy))
-            v2.x = v1.x + sx * mag
-            v2.y = v1.y + sy * mag
+            dist = math.hypot(dx, dy)
+            if dist < 1e-8:
+                # If degenerate, keep a small step in the quadrant inferred by neighbors
+                sx = 1 if dx >= 0 else -1
+                sy = 1 if dy >= 0 else -1
+                inv_sqrt2 = 1.0 / math.sqrt(2.0)
+                ux = sx * inv_sqrt2
+                uy = sy * inv_sqrt2
+                step = 1.0
+                v2.x = v1.x + ux * step
+                v2.y = v1.y + uy * step
+            else:
+                sx = 1 if dx >= 0 else -1
+                sy = 1 if dy >= 0 else -1
+                inv_sqrt2 = 1.0 / math.sqrt(2.0)
+                ux = sx * inv_sqrt2
+                uy = sy * inv_sqrt2
+                v2.x = v1.x + ux * dist
+                v2.y = v1.y + uy * dist
         else:
             return False
 
@@ -1174,13 +1189,27 @@ class PolygonItem(QGraphicsItem):
         if constraint_type == ConstraintType.VERTICAL:
             moving.x = other.x
         elif constraint_type == ConstraintType.DIAGONAL_45:
+            # Set direction to nearest 45° and preserve current Euclidean length
             dx = moving.x - other.x
             dy = moving.y - other.y
-            sx = 1 if dx >= 0 else -1
-            sy = 1 if dy >= 0 else -1
-            mag = max(abs(dx), abs(dy))
-            moving.x = other.x + sx * mag
-            moving.y = other.y + sy * mag
+            dist = math.hypot(dx, dy)
+            if dist < 1e-8:
+                sx = 1 if dx >= 0 else -1
+                sy = 1 if dy >= 0 else -1
+                inv_sqrt2 = 1.0 / math.sqrt(2.0)
+                ux = sx * inv_sqrt2
+                uy = sy * inv_sqrt2
+                step = 1.0
+                moving.x = other.x + ux * step
+                moving.y = other.y + uy * step
+            else:
+                sx = 1 if dx >= 0 else -1
+                sy = 1 if dy >= 0 else -1
+                inv_sqrt2 = 1.0 / math.sqrt(2.0)
+                ux = sx * inv_sqrt2
+                uy = sy * inv_sqrt2
+                moving.x = other.x + ux * dist
+                moving.y = other.y + uy * dist
         elif constraint_type == ConstraintType.FIXED_LENGTH:
             L = value
             if L is None:
