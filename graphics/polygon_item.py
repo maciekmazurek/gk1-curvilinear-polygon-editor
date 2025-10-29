@@ -42,6 +42,7 @@ class PolygonItem(QGraphicsItem):
         self.edge_items = []
 
         self._setup_childitems()
+        self._enforce_all_constraints_and_continuity()
 
     def boundingRect(self):
         # Build union of:
@@ -1222,3 +1223,39 @@ class PolygonItem(QGraphicsItem):
             e_item.update_edge()
 
         self.update()
+
+    def _enforce_all_constraints_and_continuity(self):
+        # Sync map for robustness
+        self._sync_edges_dict()
+
+        # 1) Enforce constraints edge-by-edge (no propagation needed here)
+        for e in list(self.polygon.edges):
+            if getattr(e, 'constraint_type', ConstraintType.NONE) != ConstraintType.NONE:
+                try:
+                    self._enforce_edge_constraint(e.v1, e.v2)
+                except Exception:
+                    continue
+
+        # 2) Enforce continuity at vertices that request it
+        for v in list(self.polygon.vertices):
+            cont = getattr(v, 'continuity', None)
+            if cont is not None and cont != ContinuityType.G0:
+                try:
+                    self.enforce_vertex_continuity_from_vertex(v)
+                except Exception:
+                    continue
+
+        # 3) Refresh visuals: positions and edges
+        self.updating_from_parent = True
+        try:
+            for v, v_item in self.vertex_items.items():
+                vertex_parent_coords = self.mapFromScene(QPointF(v.x, v.y))
+                v_item.setPos(vertex_parent_coords)
+            for e_item in self.edge_items:
+                e_item.update_edge()
+        finally:
+            self.updating_from_parent = False
+        try:
+            self.update()
+        except Exception:
+            pass

@@ -127,12 +127,16 @@ class StandardLineEdgeItem(LineEdgeItem):
         self.prepareGeometryChange()
         p1, p2 = self._convert_coords_to_parent()
         self._p1, self._p2 = p1, p2
-        # bounding rect slightly expanded to include pen
+        # bounding rect expanded to include both the pen and the constraint icon
+        # The icon can be up to ~8px radius (and we draw some text up to 16x16),
+        # so use a conservative margin to avoid repaint artefacts when dragging.
         pen_margin = 1.0
-        minx = min(p1.x(), p2.x()) - pen_margin
-        miny = min(p1.y(), p2.y()) - pen_margin
-        maxx = max(p1.x(), p2.x()) + pen_margin
-        maxy = max(p1.y(), p2.y()) + pen_margin
+        icon_margin = 10.0
+        margin = max(pen_margin, icon_margin)
+        minx = min(p1.x(), p2.x()) - margin
+        miny = min(p1.y(), p2.y()) - margin
+        maxx = max(p1.x(), p2.x()) + margin
+        maxy = max(p1.y(), p2.y()) + margin
         self._cached_bounding = QRectF(minx, miny, maxx - minx, maxy - miny)
 
     def boundingRect(self):
@@ -165,29 +169,31 @@ class BresenhamLineEdgeItem(LineEdgeItem):
         x1 = int(round(p2.x()))
         y1 = int(round(p2.y()))
 
-        # Integer bounding box in parent coordinates
-        minx = min(x0, x1) - 1
-        miny = min(y0, y1) - 1
-        maxx = max(x0, x1) + 1
-        maxy = max(y0, y1) + 1
+        # Integer bounding box in parent coordinates for the pixmap itself
+        minx_pix = min(x0, x1) - 1
+        miny_pix = min(y0, y1) - 1
+        maxx_pix = max(x0, x1) + 1
+        maxy_pix = max(y0, y1) + 1
 
-        width = maxx - minx + 1
-        height = maxy - miny + 1
+        width = maxx_pix - minx_pix + 1
+        height = maxy_pix - miny_pix + 1
 
         if width <= 0 or height <= 0:
             self._pixmap = None
-            minx = min(p1.x(), p2.x()) - 1
-            miny = min(p1.y(), p2.y()) - 1
-            maxx = max(p1.x(), p2.x()) + 1
-            maxy = max(p1.y(), p2.y()) + 1
+            # Even when no drawable pixmap, include icon margin to ensure clean repaints
+            icon_margin = 10.0
+            minx = min(p1.x(), p2.x()) - icon_margin
+            miny = min(p1.y(), p2.y()) - icon_margin
+            maxx = max(p1.x(), p2.x()) + icon_margin
+            maxy = max(p1.y(), p2.y()) + icon_margin
             self._cached_bounding = QRectF(minx, miny, maxx - minx, maxy - miny)
             return
 
         # Calculate pixel coordinates relative to image (offset by minx/miny)
-        rel_x0 = x0 - minx
-        rel_y0 = y0 - miny
-        rel_x1 = x1 - minx
-        rel_y1 = y1 - miny
+        rel_x0 = x0 - minx_pix
+        rel_y0 = y0 - miny_pix
+        rel_x1 = x1 - minx_pix
+        rel_y1 = y1 - miny_pix
 
         self._pixels = algorithms.bresenham(rel_x0, rel_y0, rel_x1, rel_y1)
 
@@ -208,8 +214,17 @@ class BresenhamLineEdgeItem(LineEdgeItem):
 
         # Converting image to pixmap and updating bounding rectangle
         self._pixmap = QPixmap.fromImage(img)
-        self._pixmap_offset = QPointF(minx, miny)
-        self._cached_bounding = QRectF(minx, miny, width, height)
+        self._pixmap_offset = QPointF(minx_pix, miny_pix)
+        # Expand the cached bounding rect beyond the pixmap so it also
+        # covers the constraint icon drawn in paint(); otherwise Qt won't
+        # invalidate the old icon area and it will leave "smudges" when dragging.
+        icon_margin = 10.0
+        self._cached_bounding = QRectF(
+            minx_pix - icon_margin,
+            miny_pix - icon_margin,
+            width + 2 * icon_margin,
+            height + 2 * icon_margin,
+        )
 
     def paint(self, painter, option, widget):
         if self._pixmap:
