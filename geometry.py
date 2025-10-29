@@ -10,6 +10,9 @@ def unit(x: float, y: float):
 def rot90_ccw(vx: float, vy: float):
     return (-vy, vx)
 
+def rot90_cw(vx, vy):
+    return (vy, -vx)
+
 def norm_angle(a: float) -> float:
     # Normalize into [0, 2π)
     while a < 0:
@@ -83,3 +86,9 @@ def neighbour_tangent(edges, idx: int, current_edge, vertex, at_v1: bool):
 
     u_, _ = unit(vx_, vy_)
     return u_
+
+def normalize_vector(vec: tuple[float, float]):
+    length = math.hypot(vec[0], vec[1])
+    if length < 1e-8:
+        return (None, length)
+    return ((vec[0] / length, vec[1] / length), length)

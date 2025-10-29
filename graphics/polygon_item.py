@@ -299,17 +299,7 @@ class PolygonItem(QGraphicsItem):
         self.polygon.edges_dict = d
 
     def _edge_between(self, a: Vertex, b: Vertex) -> Edge | None:
-        """Return the Edge instance connecting vertices a and b if present.
-
-        The edges_dict stores keys as ordered pairs (v1, v2). This helper
-        tries both orientations and returns None if no connecting edge is
-        found. This prevents KeyError during drag propagation when order may
-        differ.
-        """
-        ed = getattr(self.polygon, 'edges_dict', None)
-        if not ed:
-            return None
-        return ed.get((a, b)) or ed.get((b, a))
+        return self.polygon.edges_dict.get((a, b)) or self.polygon.edges_dict.get((b, a))
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -426,12 +416,9 @@ class PolygonItem(QGraphicsItem):
             self.updating_from_parent = False
 
         # Enforce continuity constraints for any vertices that requested it
-        try:
-            for v in self.polygon.vertices:
-                if getattr(v, 'continuity', None) is not None and v.continuity != ContinuityType.G0:
-                    self.enforce_vertex_continuity_from_vertex(v)
-        except Exception:
-            pass
+        for v in self.polygon.vertices:
+            if v.continuity is not None and v.continuity != ContinuityType.G0:
+                self.enforce_vertex_continuity_from_vertex(v)
 
         self.update()
 
@@ -440,7 +427,7 @@ class PolygonItem(QGraphicsItem):
         # If we couldn't find an edge connecting v1 and v2, stop propagation
         if current_edge is None:
             return False
-        # Jeżeli krawedz nie ma ograniczenia to przerywamy propagacje
+        # If edge has no constraint, stop propagation
         if current_edge.constraint_type == ConstraintType.NONE:
             return False
         elif current_edge.constraint_type == ConstraintType.VERTICAL:
@@ -519,13 +506,6 @@ class PolygonItem(QGraphicsItem):
 
         return (prev_edge, prev_idx, next_edge, next_idx)
 
-    @staticmethod
-    def _normalize_vector(vec: tuple[float, float]) -> tuple[tuple[float, float] | None, float]:
-        length = math.hypot(vec[0], vec[1])
-        if length < 1e-8:
-            return (None, length)
-        return ((vec[0] / length, vec[1] / length), length)
-
     def _project_direction_to_constraint(
         self,
         vertex: Vertex,
@@ -538,7 +518,7 @@ class PolygonItem(QGraphicsItem):
         vy = vertex.y
         dx = other_vertex.x - vx
         dy = other_vertex.y - vy
-        _, current_len = self._normalize_vector((dx, dy))
+        _, current_len = normalize_vector((dx, dy))
         if current_len < 1e-8:
             if constraint_type == ConstraintType.FIXED_LENGTH and constraint_value:
                 current_len = abs(constraint_value)
@@ -548,9 +528,9 @@ class PolygonItem(QGraphicsItem):
         if desired_dir is None:
             desired_dir = (dx, dy)
 
-        dir_norm, _ = self._normalize_vector(desired_dir)
+        dir_norm, _ = normalize_vector(desired_dir)
         if dir_norm is None:
-            dir_norm, _ = self._normalize_vector((dx, dy))
+            dir_norm, _ = normalize_vector((dx, dy))
         if dir_norm is None:
             dir_norm = (1.0, 0.0)
 
@@ -581,18 +561,6 @@ class PolygonItem(QGraphicsItem):
     def _arc_tangent_at_vertex(self, arc_edge: Edge, at_v1: bool) -> tuple[float, float] | None:
         if getattr(arc_edge, 'type', None) != EdgeType.ARC:
             return None
-        # Geometry closely mirrors ArcEdgeItem/shape() computation
-        def unit(x, y):
-            l = math.hypot(x, y)
-            if l < 1e-8:
-                return (None, 0.0)
-            return ((x / l, y / l), l)
-
-        def rot90_ccw(vx, vy):
-            return (-vy, vx)
-
-        def rot90_cw(vx, vy):
-            return (vy, -vx)
 
         # locate index of this arc to access neighbours in polygon order
         try:
@@ -601,7 +569,8 @@ class PolygonItem(QGraphicsItem):
             return None
         n_edges = len(self.polygon.edges)
 
-        v1 = arc_edge.v1; v2 = arc_edge.v2
+        v1 = arc_edge.v1
+        v2 = arc_edge.v2
         x1, y1 = v1.x, v1.y
         x2, y2 = v2.x, v2.y
         chord_u, chord_len = unit(x2 - x1, y2 - y1)
@@ -695,8 +664,8 @@ class PolygonItem(QGraphicsItem):
         if prev_edge is None or next_edge is None:
             return False
 
-        t1 = getattr(prev_edge, 'type', None)
-        t2 = getattr(next_edge, 'type', None)
+        t1 = prev_edge.type
+        t2 = next_edge.type
         has_bez = (t1 == EdgeType.BEZIER) or (t2 == EdgeType.BEZIER)
         has_arc = (t1 == EdgeType.ARC) or (t2 == EdgeType.ARC)
         both_line = (t1 == EdgeType.LINE) and (t2 == EdgeType.LINE)
@@ -736,10 +705,7 @@ class PolygonItem(QGraphicsItem):
         # cases, enforcement is handled implicitly by ArcEdgeItem geometry,
         # but we still refresh visuals.
         if has_bez:
-            try:
-                self.enforce_vertex_continuity_from_vertex(vertex)
-            except Exception:
-                pass
+            self.enforce_vertex_continuity_from_vertex(vertex)
 
         # Update visuals for affected edges
         try:
@@ -769,8 +735,6 @@ class PolygonItem(QGraphicsItem):
 
         prev_is_bezier = getattr(prev_edge, 'type', None) == EdgeType.BEZIER
         next_is_bezier = getattr(next_edge, 'type', None) == EdgeType.BEZIER
-
-        import math
 
         # Case A: both Bezier (existing behavior)
         if prev_is_bezier and next_is_bezier:
@@ -896,8 +860,8 @@ class PolygonItem(QGraphicsItem):
     # Metoda wywoływana przez on_control_moved w BezierEdgeItem. Modyfikuje 
     # wierzchołek sąsiadujący z wierzchołkiem vertex po przesunięciu punktu
     # kontrolnego krzywej beziera związanego z wierzchołkiem vertex, tak aby zachować ciągłość
-    # przypisaną do wierzchołka vertex (modyfikujemy tylko pozycję wierzchołka 
-    # sąsiadującego z vertex, z którym tworzy zwykłą krawędź)
+    # do niego przypisaną (modyfikujemy tylko pozycję wierzchołka sąsiadującego
+    # z wierzchołkiem vertex, z którym tworzy on zwykłą krawędź)
     def enforce_vertex_continuity_from_control(self, vertex: Vertex, moved_control: str | None = None):
         """Called when a bezier control handle adjacent to `vertex` moved.
         moved_control: 'prev' if the handle on the incoming edge (c2) moved,
@@ -916,8 +880,8 @@ class PolygonItem(QGraphicsItem):
         vx = vertex.x
         vy = vertex.y
 
-        prev_is_bezier = getattr(prev_edge, 'type', None) == EdgeType.BEZIER
-        next_is_bezier = getattr(next_edge, 'type', None) == EdgeType.BEZIER
+        prev_is_bezier = prev_edge.type == EdgeType.BEZIER
+        next_is_bezier = next_edge.type == EdgeType.BEZIER
 
         moved_vertices = []
 
@@ -1008,9 +972,9 @@ class PolygonItem(QGraphicsItem):
                     constraint_val,
                 )
             else:
-                dir_unit, _ = self._normalize_vector((pvx, pvy))
+                dir_unit, _ = normalize_vector((pvx, pvy))
                 if dir_unit is None:
-                    dir_unit, base_len = self._normalize_vector((other.x - vx, other.y - vy))
+                    dir_unit, base_len = normalize_vector((other.x - vx, other.y - vy))
                 else:
                     base_len = math.hypot(other.x - vx, other.y - vy)
                 if dir_unit is None:
@@ -1067,9 +1031,9 @@ class PolygonItem(QGraphicsItem):
                     constraint_val,
                 )
             else:
-                dir_unit, _ = self._normalize_vector(desired_dir)
+                dir_unit, _ = normalize_vector(desired_dir)
                 if dir_unit is None:
-                    dir_unit, base_len = self._normalize_vector((other.x - vx, other.y - vy))
+                    dir_unit, base_len = normalize_vector((other.x - vx, other.y - vy))
                 else:
                     base_len = math.hypot(other.x - vx, other.y - vy)
                 if dir_unit is None:
