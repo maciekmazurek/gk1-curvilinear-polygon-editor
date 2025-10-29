@@ -106,15 +106,15 @@ class VertexItem(QGraphicsEllipseItem):
                     # Prefer specific warning prepared by parent (e.g., Arc both-ends G1)
                     custom = getattr(parent, "last_continuity_warning", None)
                     if custom:
-                        QMessageBox.warning(None, "Ciągłość", custom)
+                        QMessageBox.warning(None, "Continuity", custom)
                         parent.last_continuity_warning = None
                     else:
                         QMessageBox.warning(
                             None,
-                            "Ciągłość",
+                            "Continuity",
                             (
-                                "Ciągłość można ustawić tylko dla wierzchołków sąsiadujących z krzywą Beziera lub łukiem.\n"
-                                "Dla łuków dozwolone są tylko G0 i G1."
+                                "Continuity can only be set for vertices adjacent to a Bezier curve or arc.\n"
+                                "For arcs, only G0 and G1 are allowed."
                             ),
                         )
         event.accept()

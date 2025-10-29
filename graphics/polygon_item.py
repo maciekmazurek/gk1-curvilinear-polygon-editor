@@ -3,7 +3,7 @@ from graphics.vertex_item import VertexItem
 from graphics.line_edge_item import StandardLineEdgeItem, BresenhamLineEdgeItem
 from graphics.bezier_edge_item import BezierEdgeItem
 from graphics.arc_edge_item import ArcEdgeItem
-from PySide6.QtWidgets import QGraphicsItem
+from PySide6.QtWidgets import QGraphicsItem, QMessageBox
 from PySide6.QtGui import (
     QColor,
     QPainterPath,
@@ -79,12 +79,6 @@ class PolygonItem(QGraphicsItem):
         return united.adjusted(-4, -4, 4, 4)
 
     def shape(self):
-        """
-        Build path corresponding to actual edges. This is used only for hit-testing
-        and selection. For LINE edges we add straight segments, for BEZIER we add a
-        cubicTo (used only by shape() — actual drawing of bezier is pixelized in
-        BezierEdgeItem).
-        """
         path = QPainterPath()
         edges = self.polygon.edges
         if not edges:
@@ -474,12 +468,6 @@ class PolygonItem(QGraphicsItem):
         return True
 
     def adjacent_edges_of_vertex(self, vertex: Vertex):
-        """Return edges adjacent to a vertex, robust to any edge ordering.
-
-        Prefer determining adjacency by membership (edge contains the vertex),
-        then classify prev (edge ending at vertex) and next (edge starting at vertex).
-        Falls back to index-based mapping if membership scan is inconclusive.
-        """
         if vertex not in self.polygon.vertices:
             return (None, None, None, None)
         edges = self.polygon.edges
@@ -708,8 +696,8 @@ class PolygonItem(QGraphicsItem):
             if conflicts:
                 # Warn and reject
                 msg = (
-                    "Nie można ustawić ciągłości G1 na tym wierzchołku, ponieważ na powiązanym łuku drugi wierzchołek ma już G1.\n"
-                    "Dla pojedynczego łuku tylko jeden z jego końców może mieć wymaganie G1."
+                    "You cannot set G1 continuity at this vertex because the other vertex on the associated arc already has G1.\n"
+                    "For a single arc, only one of its vertices can have the G1 continuity."
                 )
                 self.last_continuity_warning = msg
                 return False
@@ -879,12 +867,6 @@ class PolygonItem(QGraphicsItem):
     # do niego przypisaną (modyfikujemy tylko pozycję wierzchołka sąsiadującego
     # z wierzchołkiem vertex, z którym tworzy on zwykłą krawędź)
     def enforce_vertex_continuity_from_control(self, vertex: Vertex, moved_control: str | None = None):
-        """Called when a bezier control handle adjacent to `vertex` moved.
-        moved_control: 'prev' if the handle on the incoming edge (c2) moved,
-                       'next' if the handle on the outgoing edge (c1) moved.
-        Adjusts neighbouring geometry while keeping continuity and honoring
-        any constraint on the adjacent straight edge. The moved handle stays
-        as the driver and the opposite side is adjusted to satisfy continuity."""
         prev_edge, prev_idx, next_edge, next_idx = self.adjacent_edges_of_vertex(vertex)
         if prev_edge is None or next_edge is None:
             return
@@ -1160,6 +1142,17 @@ class PolygonItem(QGraphicsItem):
             # Sync edges dict and rebuild view based on the new model
             self._sync_edges_dict()
             self._rebuild_childitems()
+        else:
+            # Show a short info when trying to remove a vertex from a triangle
+            try:
+                QMessageBox.warning(
+                    None,
+                    "Removing Vertex",
+                    "You cannot delete a vertex — a polygon must have at least 3 vertices.",
+                )
+            except Exception:
+                # In non-GUI or testing contexts, just ignore the message box
+                pass
 
     def apply_constraint_to_edge(self, edge: Edge, constraint_type: ConstraintType, value=None) -> bool:
         idx = self.polygon.edges.index(edge)
