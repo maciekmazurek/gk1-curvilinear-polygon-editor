@@ -10,9 +10,10 @@ class PolygonRenderer:
         self.scene.clear()
         polygon = Polygon()
         polygon_item = PolygonItem(polygon)
-        # We set position of the polygon (parent) to (0, 0) in scene coordinates
-        # because vertices (children) are initialized with coordinates
+        # We set position of the polygon to (0, 0) in scene coordinates
+        # because vertices (his children) are initialized with coordinates
         # relative to the scene
         polygon_item.setPos(0, 0)
         self.scene.addItem(polygon_item)
+        
         return polygon_item

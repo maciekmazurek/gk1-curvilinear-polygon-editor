@@ -16,7 +16,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         rect = self.graphicsView.rect()
         self.scene.setSceneRect(0, 0, rect.width(), rect.height())
 
-        # Rendering predefined polygon
+        # Rendering initial polygon
         self.renderer = PolygonRenderer(self.scene)
         self.polygon_item = self.renderer.render()
 

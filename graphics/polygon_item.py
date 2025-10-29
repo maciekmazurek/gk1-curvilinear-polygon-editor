@@ -573,7 +573,7 @@ class PolygonItem(QGraphicsItem):
 
         return True
 
-    def _adjacent_edges_of_vertex(self, vertex: Vertex):
+    def adjacent_edges_of_vertex(self, vertex: Vertex):
         if vertex not in self.polygon.vertices:
             return (None, None, None, None)
         n = len(self.polygon.vertices)
@@ -758,7 +758,7 @@ class PolygonItem(QGraphicsItem):
 
     def apply_continuity_to_vertex(self, vertex: Vertex, continuity: ContinuityType) -> bool:
         # Now applicable when at least one adjacent edge is Bezier or Arc
-        prev_edge, prev_idx, next_edge, next_idx = self._adjacent_edges_of_vertex(vertex)
+        prev_edge, prev_idx, next_edge, next_idx = self.adjacent_edges_of_vertex(vertex)
         if prev_edge is None or next_edge is None:
             return False
 
@@ -822,7 +822,7 @@ class PolygonItem(QGraphicsItem):
     # aby zachować przypisaną ciągłość dla tego wierzchołka (modyfikujemy tylko
     # pozycję punktu kontrolnego)
     def enforce_vertex_continuity_from_vertex(self, vertex: Vertex) -> None:
-        prev_edge, prev_idx, next_edge, next_idx = self._adjacent_edges_of_vertex(vertex)
+        prev_edge, prev_idx, next_edge, next_idx = self.adjacent_edges_of_vertex(vertex)
         if prev_edge is None or next_edge is None:
             return
 
@@ -972,7 +972,7 @@ class PolygonItem(QGraphicsItem):
         Adjusts neighbouring geometry while keeping continuity and honoring
         any constraint on the adjacent straight edge. The moved handle stays
         as the driver and the opposite side is adjusted to satisfy continuity."""
-        prev_edge, prev_idx, next_edge, next_idx = self._adjacent_edges_of_vertex(vertex)
+        prev_edge, prev_idx, next_edge, next_idx = self.adjacent_edges_of_vertex(vertex)
         if prev_edge is None or next_edge is None:
             return
 
