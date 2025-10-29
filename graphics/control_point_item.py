@@ -1,4 +1,5 @@
 from model import *
+from config import VERTEX_DIAMETER
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -10,8 +11,8 @@ from PySide6.QtGui import (
 
 class ControlPointItem(QGraphicsEllipseItem):
     def __init__(self, vertex: Vertex, parent=None, color="orange"):
-        super().__init__(-vertex.radius/1.2, -vertex.radius/1.2,
-                         vertex.radius*2/1.2, vertex.radius*2/1.2, parent)
+        super().__init__(-VERTEX_DIAMETER/2.4, -VERTEX_DIAMETER/2.4,
+                         VERTEX_DIAMETER/1.2, VERTEX_DIAMETER/1.2, parent)
         self.vertex = vertex
         self.setBrush(QBrush(QColor(color)))
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
