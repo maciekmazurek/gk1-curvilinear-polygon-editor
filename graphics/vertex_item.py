@@ -31,7 +31,7 @@ class VertexItem(QGraphicsEllipseItem):
             parent = self.parentItem() # PolygonItem
             # We dont inform parent if the position change was caused by parent
             # itself (to avoid infinite loops) - we only inform parent when
-            # the user drags the vertex directly 
+            # user drags the vertex directly 
             if not parent.updating_from_parent:
                 vertex_new_scene_coords = parent.mapToScene(value)
                 parent.on_vertex_moved(self.vertex, vertex_new_scene_coords)

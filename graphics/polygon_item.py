@@ -574,16 +574,52 @@ class PolygonItem(QGraphicsItem):
         return True
 
     def adjacent_edges_of_vertex(self, vertex: Vertex):
+        """Return edges adjacent to a vertex, robust to any edge ordering.
+
+        Prefer determining adjacency by membership (edge contains the vertex),
+        then classify prev (edge ending at vertex) and next (edge starting at vertex).
+        Falls back to index-based mapping if membership scan is inconclusive.
+        """
         if vertex not in self.polygon.vertices:
             return (None, None, None, None)
-        n = len(self.polygon.vertices)
-        if n == 0:
+        edges = self.polygon.edges
+        n_edges = len(edges)
+        if n_edges == 0:
             return (None, None, None, None)
-        idx = self.polygon.vertices.index(vertex)
-        prev_idx = (idx - 1) % n
-        next_idx = idx
-        prev_edge = self.polygon.edges[prev_idx]
-        next_edge = self.polygon.edges[next_idx]
+
+        incident = [e for e in edges if getattr(e, 'v1', None) is vertex or getattr(e, 'v2', None) is vertex]
+        prev_edge = next_edge = None
+        prev_idx = next_idx = None
+
+        if incident:
+            for e in incident:
+                if getattr(e, 'v2', None) is vertex and prev_edge is None:
+                    prev_edge = e
+                    try:
+                        prev_idx = edges.index(e)
+                    except ValueError:
+                        prev_idx = None
+                if getattr(e, 'v1', None) is vertex and next_edge is None:
+                    next_edge = e
+                    try:
+                        next_idx = edges.index(e)
+                    except ValueError:
+                        next_idx = None
+
+        # If one side is still missing (e.g., inconsistent orientation), try to infer
+        if (prev_edge is None or next_edge is None) and vertex in self.polygon.vertices:
+            n = len(self.polygon.vertices)
+            idx = self.polygon.vertices.index(vertex)
+            # Expected mapping: edges[i] = (vertices[i] -> vertices[(i+1)%n])
+            infer_prev_idx = (idx - 1) % n
+            infer_next_idx = idx % n
+            if prev_edge is None and 0 <= infer_prev_idx < n_edges:
+                prev_edge = edges[infer_prev_idx]
+                prev_idx = infer_prev_idx
+            if next_edge is None and 0 <= infer_next_idx < n_edges:
+                next_edge = edges[infer_next_idx]
+                next_idx = infer_next_idx
+
         return (prev_edge, prev_idx, next_edge, next_idx)
 
     @staticmethod
