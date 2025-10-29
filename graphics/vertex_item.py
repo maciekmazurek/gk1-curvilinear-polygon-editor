@@ -81,6 +81,8 @@ class VertexItem(QGraphicsEllipseItem):
         if set_c1_action is not None:
             continuity_map[set_c1_action] = ContinuityType.C1
 
+        # Converting screenPos from QPointF to QPoint so we can pass it to
+        # menu.exec()
         sp = event.screenPos()
         try:
             qp = sp.toPoint()

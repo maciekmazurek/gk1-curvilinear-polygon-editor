@@ -22,8 +22,6 @@ import algorithms
 # Base class for line edge items (StandardLineEdgeItem, BresenhamLineEdgeItem)
 class LineEdgeItem(EdgeItem):
     def __init__(self, edge: Edge, parent):
-        if edge.type != EdgeType.LINE:
-            pass # Should implement raising an error
         super().__init__(edge, parent)
         self._cached_bounding = QRectF(0, 0, 0, 0)
         self._p1 = QPointF()
@@ -32,7 +30,7 @@ class LineEdgeItem(EdgeItem):
         self.setAcceptHoverEvents(True)
         self.setAcceptedMouseButtons(Qt.LeftButton | Qt.RightButton)
 
-    def convert_coords_to_parent(self):
+    def _convert_coords_to_parent(self):
         p1 = self.parentItem().mapFromScene(QPointF(self.edge.v1.x, self.edge.v1.y))
         p2 = self.parentItem().mapFromScene(QPointF(self.edge.v2.x, self.edge.v2.y))
         return (p1, p2)
@@ -59,34 +57,27 @@ class LineEdgeItem(EdgeItem):
         chosen_action = menu.exec(qp)
 
         parent = self.parentItem()
-        if chosen_action == add_vertex_action:
-            if parent:
+        if parent:
+            if chosen_action == add_vertex_action:
                 parent.add_vertex_on_edge(self.edge)
-        elif chosen_action == set_vertical_action:
-            if parent:
+            elif chosen_action == set_vertical_action:
                 ok = parent.apply_constraint_to_edge(self.edge, ConstraintType.VERTICAL)
                 if not ok:
                     QMessageBox.warning(None, "Constraint", "Cannot set vertical constraint: adjacent edge is already vertical.")
-        elif chosen_action == set_45_action:
-            if parent:
+            elif chosen_action == set_45_action:
                 parent.apply_constraint_to_edge(self.edge, ConstraintType.DIAGONAL_45)
-        elif chosen_action == set_length_action:
-            if parent:
-                # ask user for desired length
+            elif chosen_action == set_length_action:
+                # Ask user for desired length
                 current_len = ((self.edge.v1.x - self.edge.v2.x)**2 + (self.edge.v1.y - self.edge.v2.y)**2) ** 0.5
                 val, ok = QInputDialog.getDouble(None, "Fixed length", "Length:", current_len, 0.0, 1e6, 2)
                 if ok:
                     parent.apply_constraint_to_edge(self.edge, ConstraintType.FIXED_LENGTH, val)
-        elif chosen_action == clear_constraint_action:
-            if parent:
+            elif chosen_action == clear_constraint_action:
                 parent.apply_constraint_to_edge(self.edge, ConstraintType.NONE, None)
-        elif chosen_action == to_bezier_action:
-            if parent:
+            elif chosen_action == to_bezier_action:
                 parent.convert_edge_to_bezier(self.edge)
-        elif chosen_action == to_arc_action:
-            if parent:
+            elif chosen_action == to_arc_action:
                 parent.convert_edge_to_arc(self.edge)
-
         event.accept()
 
     def _draw_constraint_icon(self, painter):
@@ -134,7 +125,7 @@ class StandardLineEdgeItem(LineEdgeItem):
 
     def update_edge(self):
         self.prepareGeometryChange()
-        p1, p2 = self.convert_coords_to_parent()
+        p1, p2 = self._convert_coords_to_parent()
         self._p1, self._p2 = p1, p2
         # bounding rect slightly expanded to include pen
         pen_margin = 1.0
@@ -149,6 +140,7 @@ class StandardLineEdgeItem(LineEdgeItem):
     
     def paint(self, painter, option, widget):
         painter.setPen(QPen(QColor("black")))
+        # Draw line
         painter.drawLine(self._p1, self._p2)
         self._draw_constraint_icon(painter)
 
@@ -165,7 +157,7 @@ class BresenhamLineEdgeItem(LineEdgeItem):
 
     def update_edge(self):
         self.prepareGeometryChange()
-        p1, p2 = self.convert_coords_to_parent()
+        p1, p2 = self._convert_coords_to_parent()
         self._p1, self._p2 = p1, p2
 
         x0 = int(round(p1.x()))
@@ -221,8 +213,8 @@ class BresenhamLineEdgeItem(LineEdgeItem):
 
     def paint(self, painter, option, widget):
         if self._pixmap:
-            # Draw pixmap at precomputed offset (in parent local coordinates)
+            # Draw line
             painter.drawPixmap(self._pixmap_offset, self._pixmap)
             # Uncomment the following line to show that functionality is working
-            print(f"[DEBUG] Painting Bresenham line with {len(self._pixels)} pixels")
+            # print(f"[DEBUG] Painting Bresenham line with {len(self._pixels)} pixels")
             self._draw_constraint_icon(painter)

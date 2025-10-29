@@ -46,7 +46,7 @@ class Polygon:
         vertex_0 = Vertex(-20, 120)
         vertex_0.continuity = ContinuityType.C1
         vertex_1 = Vertex(-30, -30)
-        vertex_1.continuity = ContinuityType.G1
+        vertex_1.continuity = ContinuityType.C1
         vertex_2 = Vertex(60, -60)
         vertex_3 = Vertex(180, -10)
         vertex_4 = Vertex(140, 100)
