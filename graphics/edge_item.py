@@ -3,7 +3,8 @@ from PySide6.QtWidgets import QGraphicsItem
 from PySide6.QtGui import QPainterPath
 from PySide6.QtCore import QRectF
 
-# Base class for edge items (StandardLine, BresenhamLine, Bezier, Arc)
+# Base class for edge items (StandardLineEdgeItem, BresenhamLineEdgeItem, 
+# BezierEdgeItem, ArcEdgeItem)
 class EdgeItem(QGraphicsItem):
     def __init__(self, edge: Edge, parent):
         super().__init__(parent)

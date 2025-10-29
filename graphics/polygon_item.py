@@ -10,6 +10,7 @@ from PySide6.QtGui import (
     QPen,
 )
 from PySide6.QtCore import QPointF, QRectF, Qt
+from geometry import *
 
 import math
 
@@ -25,10 +26,10 @@ class PolygonItem(QGraphicsItem):
         self.setAcceptHoverEvents(True)
 
         # Default line drawing mode
-        self.line_drawing_mode = LineDrawingMode.QGRAPHICS
+        self._line_drawing_mode = LineDrawingMode.QGRAPHICS
 
         # Flag indicating whether the position of vertices is being currently 
-        # updated by the parent (this class)
+        # updated by the parent (i.e. this class)
         self.updating_from_parent = False
 
         # Properties used for implementing polygon dragging
@@ -41,11 +42,12 @@ class PolygonItem(QGraphicsItem):
         self.edge_items = []
 
         self._setup_childitems()
+        self._enforce_all_constraints_and_continuity()
 
     def boundingRect(self):
         # Build union of:
-        #  - vertex bounding box (scene coords -> local)
-        #  - bounding rects of all child edge items (they are in local coords)
+        #  - vertex bounding box
+        #  - bounding rects of all child edge items
         rects = []
 
         if self.polygon.vertices:
@@ -57,8 +59,8 @@ class PolygonItem(QGraphicsItem):
             bottom_right = self.mapFromScene(QPointF(maxx, maxy))
             rects.append(QRectF(top_left, bottom_right).normalized())
 
-        # include child edge items' bounding rects (already in local coords)
-        for e_item in getattr(self, "edge_items", []):
+        # include child edge items' bounding rects
+        for e_item in self.edge_items:
             try:
                 r = e_item.boundingRect()
             except Exception:
@@ -77,205 +79,113 @@ class PolygonItem(QGraphicsItem):
         return united.adjusted(-4, -4, 4, 4)
 
     def shape(self):
-        """
-        Build path corresponding to actual edges. This is used only for hit-testing
-        and selection. For LINE edges we add straight segments, for BEZIER we add a
-        cubicTo (used only by shape() — actual drawing of bezier is pixelized in
-        BezierEdgeItem).
-        """
         path = QPainterPath()
-        if not self.polygon.edges:
+        edges = self.polygon.edges
+        if not edges:
             return path
 
-        # start from first edge's v1
-        first_edge = self.polygon.edges[0]
-        start = self.mapFromScene(QPointF(first_edge.v1.x, first_edge.v1.y))
+        # Small helper local to mapping into parent coordinates
+        def to_parent(x: float, y: float) -> QPointF:
+            return self.mapFromScene(QPointF(x, y))
+
+        # Start path at first edge's v1
+        start = to_parent(edges[0].v1.x, edges[0].v1.y)
         path.moveTo(start)
 
-        n_edges = len(self.polygon.edges)
-        for idx, e in enumerate(self.polygon.edges):
-            if getattr(e, "type", None) == EdgeType.LINE:
-                p2 = self.mapFromScene(QPointF(e.v2.x, e.v2.y))
-                path.lineTo(p2)
-            elif getattr(e, "type", None) == EdgeType.BEZIER:
-                # add cubicTo for hit-testing (control points in scene coords -> map)
-                c1 = self.mapFromScene(QPointF(e.c1.x, e.c1.y))
-                c2 = self.mapFromScene(QPointF(e.c2.x, e.c2.y))
-                p3 = self.mapFromScene(QPointF(e.v2.x, e.v2.y))
+        for idx, e in enumerate(edges):
+            etype = getattr(e, "type", None)
+
+            if etype == EdgeType.LINE:
+                path.lineTo(to_parent(e.v2.x, e.v2.y))
+                continue
+
+            if etype == EdgeType.BEZIER:
+                # Use cubicTo for shape-based hit testing
+                c1 = to_parent(e.c1.x, e.c1.y)
+                c2 = to_parent(e.c2.x, e.c2.y)
+                p3 = to_parent(e.v2.x, e.v2.y)
                 path.cubicTo(c1, c2, p3)
-            elif getattr(e, "type", None) == EdgeType.ARC:
-                # approximate the circular arc with a polyline so the polygon
-                # shape uses the true arc boundary (not the chord)
-                import math
+                continue
 
-                def unit(x, y):
-                    l = math.hypot(x, y)
-                    if l < 1e-8:
-                        return (None, 0.0)
-                    return ((x / l, y / l), l)
-
-                def rot90_ccw(vx, vy):
-                    return (-vy, vx)
-
-                # neighbour-based tangent at a vertex (scene coords)
-                def tangent_at_vertex(vertex, at_v1: bool):
-                    # for v1, neighbour is previous edge; for v2, neighbour is this edge's next
-                    if at_v1:
-                        ne = self.polygon.edges[(idx - 1) % n_edges]
-                        # Special case: vertex adjacent to two arcs with G1 -> use bisector tangent
-                        if getattr(ne, 'type', None) == EdgeType.ARC and getattr(vertex, 'continuity', None) and getattr(vertex.continuity, 'name', None) == 'G1':
-                            # incoming along prev arc chord into vertex
-                            if ne.v2 is vertex:
-                                inx = vertex.x - ne.v1.x; iny = vertex.y - ne.v1.y
-                            else:
-                                inx = vertex.x - ne.v2.x; iny = vertex.y - ne.v2.y
-                            # outgoing along this arc chord from vertex to v2
-                            outx = e.v2.x - vertex.x; outy = e.v2.y - vertex.y
-                            u_in, _ = unit(inx, iny)
-                            u_out, _ = unit(outx, outy)
-                            if u_in is not None and u_out is not None:
-                                bx = u_in[0] + u_out[0]; by = u_in[1] + u_out[1]
-                                u_b, _ = unit(bx, by)
-                                if u_b is None:
-                                    return u_out
-                                return u_b
-                        if ne.v2 is vertex:
-                            vx = vertex.x - ne.v1.x
-                            vy = vertex.y - ne.v1.y
-                        else:
-                            vx = ne.v2.x - vertex.x
-                            vy = ne.v2.y - vertex.y
-                        if getattr(ne, 'type', None) == EdgeType.BEZIER:
-                            try:
-                                vx = vertex.x - ne.c2.x
-                                vy = vertex.y - ne.c2.y
-                            except Exception:
-                                pass
-                    else:
-                        # For v2, the neighbour is the edge AFTER this arc
-                        ne = self.polygon.edges[(idx + 1) % n_edges]
-                        # Special case: vertex adjacent to two arcs with G1 -> use bisector tangent
-                        if getattr(ne, 'type', None) == EdgeType.ARC and getattr(vertex, 'continuity', None) and getattr(vertex.continuity, 'name', None) == 'G1':
-                            # incoming along this arc chord into vertex (from v1)
-                            inx = vertex.x - e.v1.x; iny = vertex.y - e.v1.y
-                            # outgoing along next arc chord from vertex
-                            if ne.v1 is vertex:
-                                outx = ne.v2.x - vertex.x; outy = ne.v2.y - vertex.y
-                            else:
-                                outx = ne.v1.x - vertex.x; outy = ne.v1.y - vertex.y
-                            u_in, _ = unit(inx, iny)
-                            u_out, _ = unit(outx, outy)
-                            if u_in is not None and u_out is not None:
-                                bx = u_in[0] + u_out[0]; by = u_in[1] + u_out[1]
-                                u_b, _ = unit(bx, by)
-                                if u_b is None:
-                                    return u_out
-                                return u_b
-                        if ne.v1 is vertex:
-                            vx = ne.v2.x - vertex.x
-                            vy = ne.v2.y - vertex.y
-                        else:
-                            vx = vertex.x - ne.v1.x
-                            vy = vertex.y - ne.v1.y
-                        if getattr(ne, 'type', None) == EdgeType.BEZIER:
-                            try:
-                                vx = ne.c1.x - vertex.x
-                                vy = ne.c1.y - vertex.y
-                            except Exception:
-                                pass
-                    u, _ = unit(vx, vy)
-                    return u
-
-                v1 = e.v1; v2 = e.v2
+            if etype == EdgeType.ARC:
+                # Approximate arc with polyline consistent with ArcEdgeItem
+                v1, v2 = e.v1, e.v2
                 x1, y1 = v1.x, v1.y
                 x2, y2 = v2.x, v2.y
+
                 chord_u, chord_len = unit(x2 - x1, y2 - y1)
                 if chord_u is None or chord_len < 1e-6:
-                    # degenerate -> straight segment
-                    p2 = self.mapFromScene(QPointF(e.v2.x, e.v2.y))
-                    path.lineTo(p2)
-                else:
-                    # compute circle geometry consistent with ArcEdgeItem
-                    g1_v1 = getattr(v1, 'continuity', None) and v1.continuity.name == 'G1'
-                    g1_v2 = getattr(v2, 'continuity', None) and v2.continuity.name == 'G1'
-                    if g1_v1 and g1_v2:
-                        g1_v2 = False
+                    # Degenerate: draw the chord
+                    path.lineTo(to_parent(e.v2.x, e.v2.y))
+                    continue
 
-                    Mx = (x1 + x2) * 0.5
-                    My = (y1 + y2) * 0.5
-                    ncx, ncy = rot90_ccw(*chord_u)
+                # Continuity flags: only one end of a given arc may be G1
+                g1_v1 = getattr(v1, 'continuity', None) and v1.continuity.name == 'G1'
+                g1_v2 = getattr(v2, 'continuity', None) and v2.continuity.name == 'G1'
+                if g1_v1 and g1_v2:
+                    g1_v2 = False
 
-                    Cx, Cy = Mx, My
-                    R = chord_len * 0.5
-                    prefer_ccw = True
+                # Base circle via chord mid-point and normal
+                Mx, My = (x1 + x2) * 0.5, (y1 + y2) * 0.5
+                ncx, ncy = rot90_ccw(*chord_u)
+                Cx, Cy = Mx, My
+                R = chord_len * 0.5
+                prefer_ccw = True
 
-                    if g1_v1 or g1_v2:
-                        if g1_v1:
-                            t = tangent_at_vertex(v1, at_v1=True)
-                            Px, Py = x1, y1
-                        else:
-                            t = tangent_at_vertex(v2, at_v1=False)
-                            Px, Py = x2, y2
-                        if t is not None:
-                            ntx, nty = rot90_ccw(*t)
-                            mx = Mx - Px
-                            my = My - Py
-                            det = ntx * (-ncy) - nty * (-ncx)
-                            if abs(det) > 1e-8:
-                                s = (mx * (-ncy) - my * (-ncx)) / det
-                                Cx = Px + s * ntx
-                                Cy = Py + s * nty
-                                R = math.hypot(Px - Cx, Py - Cy)
-                                rx = Px - Cx
-                                ry = Py - Cy
-                                r_u, _ = unit(rx, ry)
-                                if r_u is not None:
-                                    # pick orientation so tangent at endpoint matches
-                                    tx_ccw_x, tx_ccw_y = rot90_ccw(*r_u)
-                                    tx_cw_x, tx_cw_y = (r_u[1], -r_u[0])
-                                    dot_ccw = tx_ccw_x * t[0] + tx_ccw_y * t[1]
-                                    dot_cw = tx_cw_x * t[0] + tx_cw_y * t[1]
-                                    prefer_ccw = dot_ccw >= dot_cw
-
-                    a1 = math.atan2(y1 - Cy, x1 - Cx)
-                    a2 = math.atan2(y2 - Cy, x2 - Cx)
-
-                    def norm(a):
-                        while a < 0:
-                            a += 2 * math.pi
-                        while a >= 2 * math.pi:
-                            a -= 2 * math.pi
-                        return a
-
-                    a1n = norm(a1)
-                    a2n = norm(a2)
-                    if prefer_ccw:
-                        sweep = a2n - a1n
-                        if sweep <= 0:
-                            sweep += 2 * math.pi
-                        sign = 1.0
+                # If G1 at one endpoint, adjust center to match desired tangent
+                if g1_v1 or g1_v2:
+                    if g1_v1:
+                        t = neighbour_tangent(edges, idx, e, v1, True); Px, Py = x1, y1
                     else:
-                        sweep = a1n - a2n
-                        if sweep <= 0:
-                            sweep += 2 * math.pi
-                        sweep = -sweep
-                        sign = -1.0
+                        t = neighbour_tangent(edges, idx, e, v2, False); Px, Py = x2, y2
+                    if t is not None:
+                        ntx, nty = rot90_ccw(*t)
+                        mx, my = Mx - Px, My - Py
+                        det = ntx * (-ncy) - nty * (-ncx)
+                        if abs(det) > 1e-8:
+                            s = (mx * (-ncy) - my * (-ncx)) / det
+                            Cx, Cy = Px + s * ntx, Py + s * nty
+                            R = math.hypot(Px - Cx, Py - Cy)
+                            # Choose orientation so arc tangent matches desired t at endpoint
+                            rx, ry = Px - Cx, Py - Cy
+                            r_u, _ = unit(rx, ry)
+                            if r_u is not None:
+                                tx_ccw_x, tx_ccw_y = rot90_ccw(*r_u)
+                                tx_cw_x, tx_cw_y = (r_u[1], -r_u[0])
+                                dot_ccw = tx_ccw_x * t[0] + tx_ccw_y * t[1]
+                                dot_cw = tx_cw_x * t[0] + tx_cw_y * t[1]
+                                prefer_ccw = dot_ccw >= dot_cw
 
-                    total_angle = abs(sweep)
-                    samples = max(int(R * total_angle * 1.5), 24)
-                    samples = min(samples, 1024)
-                    dt = total_angle / samples if samples > 0 else total_angle
+                a1 = math.atan2(y1 - Cy, x1 - Cx)
+                a2 = math.atan2(y2 - Cy, x2 - Cx)
+                a1n, a2n = norm_angle(a1), norm_angle(a2)
 
-                    for i in range(1, samples + 1):
-                        a = a1 + sign * dt * i
-                        sx = Cx + R * math.cos(a)
-                        sy = Cy + R * math.sin(a)
-                        p = self.mapFromScene(QPointF(sx, sy))
-                        path.lineTo(p)
-            else:
-                # fallback to straight line
-                p2 = self.mapFromScene(QPointF(e.v2.x, e.v2.y))
-                path.lineTo(p2)
+                if prefer_ccw:
+                    sweep = a2n - a1n
+                    if sweep <= 0:
+                        sweep += 2 * math.pi
+                    sign = 1.0
+                else:
+                    sweep = a1n - a2n
+                    if sweep <= 0:
+                        sweep += 2 * math.pi
+                    sweep = -sweep
+                    sign = -1.0
+
+                total_angle = abs(sweep)
+                samples = max(int(R * total_angle * 1.5), 24)
+                samples = min(samples, 1024)
+                dt = total_angle / samples if samples > 0 else total_angle
+
+                for i in range(1, samples + 1):
+                    a = a1 + sign * dt * i
+                    sx = Cx + R * math.cos(a)
+                    sy = Cy + R * math.sin(a)
+                    path.lineTo(to_parent(sx, sy))
+                continue
+
+            # Fallback for unknown type: draw straight line to v2
+            path.lineTo(to_parent(e.v2.x, e.v2.y))
 
         return path
     
@@ -330,7 +240,7 @@ class PolygonItem(QGraphicsItem):
         self._setup_childitems()
         self.update()
 
-    # --- Edge conversion helpers ---
+    # convert_edge helper method
     def _replace_edge_at_index(self, idx: int, new_edge: Edge):
         self.polygon.edges[idx] = new_edge
         # reset constraints on non-line edges
@@ -341,51 +251,33 @@ class PolygonItem(QGraphicsItem):
         self._sync_edges_dict()
         self._rebuild_childitems()
 
-    def convert_edge_to_line(self, edge: Edge):
-        try:
-            idx = self.polygon.edges.index(edge)
-        except ValueError:
-            return
+    def convert_edge(self, edge: Edge, new_type: EdgeType):
+        idx = self.polygon.edges.index(edge)
         v1, v2 = edge.v1, edge.v2
-        new_edge = Edge(v1, v2)
-        self._replace_edge_at_index(idx, new_edge)
-
-    def convert_edge_to_bezier(self, edge: Edge):
-        try:
-            idx = self.polygon.edges.index(edge)
-        except ValueError:
-            return
-        v1, v2 = edge.v1, edge.v2
-        # initialize control points along the chord at 1/3 and 2/3 positions
-        dx = v2.x - v1.x
-        dy = v2.y - v1.y
-        c1 = Vertex(v1.x + dx / 3.0, v1.y + dy / 3.0)
-        c2 = Vertex(v2.x - dx / 3.0, v2.y - dy / 3.0)
-        new_edge = Bezier(v1, v2, c1, c2)
-        self._replace_edge_at_index(idx, new_edge)
-
-        # Try to enforce C1 at both endpoints; if disallowed due to Arc adjacency, fall back to G1
-        for vert in (v1, v2):
-            if not self.apply_continuity_to_vertex(vert, ContinuityType.C1):
-                self.apply_continuity_to_vertex(vert, ContinuityType.G1)
-
-    def convert_edge_to_arc(self, edge: Edge):
-        try:
-            idx = self.polygon.edges.index(edge)
-        except ValueError:
-            return
-        v1, v2 = edge.v1, edge.v2
-        new_edge = Arc(v1, v2)
-        self._replace_edge_at_index(idx, new_edge)
-        # For arcs: enforce G0 at both endpoints
-        v1.continuity = ContinuityType.G0
-        v2.continuity = ContinuityType.G0
-        try:
+        if new_type == EdgeType.LINE:
+            new_edge = Edge(v1, v2)
+            self._replace_edge_at_index(idx, new_edge)
+        elif new_type == EdgeType.BEZIER:
+            # initialize control points along the chord at 1/3 and 2/3 positions
+            dx = v2.x - v1.x
+            dy = v2.y - v1.y
+            c1 = Vertex(v1.x + dx / 3.0, v1.y + dy / 3.0)
+            c2 = Vertex(v2.x - dx / 3.0, v2.y - dy / 3.0)
+            new_edge = Bezier(v1, v2, c1, c2)
+            self._replace_edge_at_index(idx, new_edge)
+            # Try to enforce C1 at both endpoints; if disallowed due to Arc adjacency, fall back to G1
+            for v in (v1, v2):
+                if not self.apply_continuity_to_vertex(v, ContinuityType.C1):
+                    self.apply_continuity_to_vertex(v, ContinuityType.G1)
+        elif new_type == EdgeType.ARC:
+            new_edge = Arc(v1, v2)
+            self._replace_edge_at_index(idx, new_edge)
+            # For arcs: enforce G0 at both endpoints
+            v1.continuity = ContinuityType.G0
+            v2.continuity = ContinuityType.G0
             # refresh visuals after continuity change
             self.edge_items[idx].update_edge()
             self.update()
-        except Exception:
-            pass
 
     def _sync_edges_dict(self):
         # Recreate mapping from (v1, v2) -> Edge for current polygon.edges
@@ -402,17 +294,7 @@ class PolygonItem(QGraphicsItem):
         self.polygon.edges_dict = d
 
     def _edge_between(self, a: Vertex, b: Vertex) -> Edge | None:
-        """Return the Edge instance connecting vertices a and b if present.
-
-        The edges_dict stores keys as ordered pairs (v1, v2). This helper
-        tries both orientations and returns None if no connecting edge is
-        found. This prevents KeyError during drag propagation when order may
-        differ.
-        """
-        ed = getattr(self.polygon, 'edges_dict', None)
-        if not ed:
-            return None
-        return ed.get((a, b)) or ed.get((b, a))
+        return self.polygon.edges_dict.get((a, b)) or self.polygon.edges_dict.get((b, a))
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -473,9 +355,9 @@ class PolygonItem(QGraphicsItem):
 
     def EdgeItemFactory(self, edge: Edge, parent):
         if edge.type == EdgeType.LINE:
-            if self.line_drawing_mode == LineDrawingMode.QGRAPHICS:
+            if self._line_drawing_mode == LineDrawingMode.QGRAPHICS:
                 return StandardLineEdgeItem(edge, parent)
-            elif self.line_drawing_mode == LineDrawingMode.BRESENHAM:
+            elif self._line_drawing_mode == LineDrawingMode.BRESENHAM:
                 return BresenhamLineEdgeItem(edge, parent)
         elif edge.type == EdgeType.BEZIER:
             return BezierEdgeItem(edge, parent)
@@ -529,12 +411,9 @@ class PolygonItem(QGraphicsItem):
             self.updating_from_parent = False
 
         # Enforce continuity constraints for any vertices that requested it
-        try:
-            for v in self.polygon.vertices:
-                if getattr(v, 'continuity', None) is not None and v.continuity != ContinuityType.G0:
-                    self.enforce_vertex_continuity_from_vertex(v)
-        except Exception:
-            pass
+        for v in self.polygon.vertices:
+            if v.continuity is not None and v.continuity != ContinuityType.G0:
+                self.enforce_vertex_continuity_from_vertex(v)
 
         self.update()
 
@@ -543,7 +422,7 @@ class PolygonItem(QGraphicsItem):
         # If we couldn't find an edge connecting v1 and v2, stop propagation
         if current_edge is None:
             return False
-        # Jeżeli krawedz nie ma ograniczenia to przerywamy propagacje
+        # If edge has no constraint, stop propagation
         if current_edge.constraint_type == ConstraintType.NONE:
             return False
         elif current_edge.constraint_type == ConstraintType.VERTICAL:
@@ -561,37 +440,75 @@ class PolygonItem(QGraphicsItem):
                 v2.x = v1.x + dx * scale
                 v2.y = v1.y + dy * scale
         elif current_edge.constraint_type == ConstraintType.DIAGONAL_45:
+            # Project direction to nearest 45° while preserving current Euclidean length
             dx = v2.x - v1.x
             dy = v2.y - v1.y
-            sx = 1 if dx >= 0 else -1
-            sy = 1 if dy >= 0 else -1
-            mag = max(abs(dx), abs(dy))
-            v2.x = v1.x + sx * mag
-            v2.y = v1.y + sy * mag
+            dist = math.hypot(dx, dy)
+            if dist < 1e-8:
+                # If degenerate, keep a small step in the quadrant inferred by neighbors
+                sx = 1 if dx >= 0 else -1
+                sy = 1 if dy >= 0 else -1
+                inv_sqrt2 = 1.0 / math.sqrt(2.0)
+                ux = sx * inv_sqrt2
+                uy = sy * inv_sqrt2
+                step = 1.0
+                v2.x = v1.x + ux * step
+                v2.y = v1.y + uy * step
+            else:
+                sx = 1 if dx >= 0 else -1
+                sy = 1 if dy >= 0 else -1
+                inv_sqrt2 = 1.0 / math.sqrt(2.0)
+                ux = sx * inv_sqrt2
+                uy = sy * inv_sqrt2
+                v2.x = v1.x + ux * dist
+                v2.y = v1.y + uy * dist
         else:
             return False
 
         return True
 
-    def _adjacent_edges_of_vertex(self, vertex: Vertex):
+    def adjacent_edges_of_vertex(self, vertex: Vertex):
         if vertex not in self.polygon.vertices:
             return (None, None, None, None)
-        n = len(self.polygon.vertices)
-        if n == 0:
+        edges = self.polygon.edges
+        n_edges = len(edges)
+        if n_edges == 0:
             return (None, None, None, None)
-        idx = self.polygon.vertices.index(vertex)
-        prev_idx = (idx - 1) % n
-        next_idx = idx
-        prev_edge = self.polygon.edges[prev_idx]
-        next_edge = self.polygon.edges[next_idx]
-        return (prev_edge, prev_idx, next_edge, next_idx)
 
-    @staticmethod
-    def _normalize_vector(vec: tuple[float, float]) -> tuple[tuple[float, float] | None, float]:
-        length = math.hypot(vec[0], vec[1])
-        if length < 1e-8:
-            return (None, length)
-        return ((vec[0] / length, vec[1] / length), length)
+        incident = [e for e in edges if getattr(e, 'v1', None) is vertex or getattr(e, 'v2', None) is vertex]
+        prev_edge = next_edge = None
+        prev_idx = next_idx = None
+
+        if incident:
+            for e in incident:
+                if getattr(e, 'v2', None) is vertex and prev_edge is None:
+                    prev_edge = e
+                    try:
+                        prev_idx = edges.index(e)
+                    except ValueError:
+                        prev_idx = None
+                if getattr(e, 'v1', None) is vertex and next_edge is None:
+                    next_edge = e
+                    try:
+                        next_idx = edges.index(e)
+                    except ValueError:
+                        next_idx = None
+
+        # If one side is still missing (e.g., inconsistent orientation), try to infer
+        if (prev_edge is None or next_edge is None) and vertex in self.polygon.vertices:
+            n = len(self.polygon.vertices)
+            idx = self.polygon.vertices.index(vertex)
+            # Expected mapping: edges[i] = (vertices[i] -> vertices[(i+1)%n])
+            infer_prev_idx = (idx - 1) % n
+            infer_next_idx = idx % n
+            if prev_edge is None and 0 <= infer_prev_idx < n_edges:
+                prev_edge = edges[infer_prev_idx]
+                prev_idx = infer_prev_idx
+            if next_edge is None and 0 <= infer_next_idx < n_edges:
+                next_edge = edges[infer_next_idx]
+                next_idx = infer_next_idx
+
+        return (prev_edge, prev_idx, next_edge, next_idx)
 
     def _project_direction_to_constraint(
         self,
@@ -605,7 +522,7 @@ class PolygonItem(QGraphicsItem):
         vy = vertex.y
         dx = other_vertex.x - vx
         dy = other_vertex.y - vy
-        _, current_len = self._normalize_vector((dx, dy))
+        _, current_len = normalize_vector((dx, dy))
         if current_len < 1e-8:
             if constraint_type == ConstraintType.FIXED_LENGTH and constraint_value:
                 current_len = abs(constraint_value)
@@ -615,9 +532,9 @@ class PolygonItem(QGraphicsItem):
         if desired_dir is None:
             desired_dir = (dx, dy)
 
-        dir_norm, _ = self._normalize_vector(desired_dir)
+        dir_norm, _ = normalize_vector(desired_dir)
         if dir_norm is None:
-            dir_norm, _ = self._normalize_vector((dx, dy))
+            dir_norm, _ = normalize_vector((dx, dy))
         if dir_norm is None:
             dir_norm = (1.0, 0.0)
 
@@ -648,18 +565,6 @@ class PolygonItem(QGraphicsItem):
     def _arc_tangent_at_vertex(self, arc_edge: Edge, at_v1: bool) -> tuple[float, float] | None:
         if getattr(arc_edge, 'type', None) != EdgeType.ARC:
             return None
-        # Geometry closely mirrors ArcEdgeItem/shape() computation
-        def unit(x, y):
-            l = math.hypot(x, y)
-            if l < 1e-8:
-                return (None, 0.0)
-            return ((x / l, y / l), l)
-
-        def rot90_ccw(vx, vy):
-            return (-vy, vx)
-
-        def rot90_cw(vx, vy):
-            return (vy, -vx)
 
         # locate index of this arc to access neighbours in polygon order
         try:
@@ -668,7 +573,8 @@ class PolygonItem(QGraphicsItem):
             return None
         n_edges = len(self.polygon.edges)
 
-        v1 = arc_edge.v1; v2 = arc_edge.v2
+        v1 = arc_edge.v1
+        v2 = arc_edge.v2
         x1, y1 = v1.x, v1.y
         x2, y2 = v2.x, v2.y
         chord_u, chord_len = unit(x2 - x1, y2 - y1)
@@ -758,12 +664,12 @@ class PolygonItem(QGraphicsItem):
 
     def apply_continuity_to_vertex(self, vertex: Vertex, continuity: ContinuityType) -> bool:
         # Now applicable when at least one adjacent edge is Bezier or Arc
-        prev_edge, prev_idx, next_edge, next_idx = self._adjacent_edges_of_vertex(vertex)
+        prev_edge, prev_idx, next_edge, next_idx = self.adjacent_edges_of_vertex(vertex)
         if prev_edge is None or next_edge is None:
             return False
 
-        t1 = getattr(prev_edge, 'type', None)
-        t2 = getattr(next_edge, 'type', None)
+        t1 = prev_edge.type
+        t2 = next_edge.type
         has_bez = (t1 == EdgeType.BEZIER) or (t2 == EdgeType.BEZIER)
         has_arc = (t1 == EdgeType.ARC) or (t2 == EdgeType.ARC)
         both_line = (t1 == EdgeType.LINE) and (t2 == EdgeType.LINE)
@@ -790,8 +696,8 @@ class PolygonItem(QGraphicsItem):
             if conflicts:
                 # Warn and reject
                 msg = (
-                    "Nie można ustawić ciągłości G1 na tym wierzchołku, ponieważ na powiązanym łuku drugi wierzchołek ma już G1.\n"
-                    "Dla pojedynczego łuku tylko jeden z jego końców może mieć wymaganie G1."
+                    "You cannot set G1 continuity at this vertex because the other vertex on the associated arc already has G1.\n"
+                    "For a single arc, only one of its vertices can have the G1 continuity."
                 )
                 self.last_continuity_warning = msg
                 return False
@@ -803,10 +709,7 @@ class PolygonItem(QGraphicsItem):
         # cases, enforcement is handled implicitly by ArcEdgeItem geometry,
         # but we still refresh visuals.
         if has_bez:
-            try:
-                self.enforce_vertex_continuity_from_vertex(vertex)
-            except Exception:
-                pass
+            self.enforce_vertex_continuity_from_vertex(vertex)
 
         # Update visuals for affected edges
         try:
@@ -822,7 +725,7 @@ class PolygonItem(QGraphicsItem):
     # aby zachować przypisaną ciągłość dla tego wierzchołka (modyfikujemy tylko
     # pozycję punktu kontrolnego)
     def enforce_vertex_continuity_from_vertex(self, vertex: Vertex) -> None:
-        prev_edge, prev_idx, next_edge, next_idx = self._adjacent_edges_of_vertex(vertex)
+        prev_edge, prev_idx, next_edge, next_idx = self.adjacent_edges_of_vertex(vertex)
         if prev_edge is None or next_edge is None:
             return
 
@@ -836,8 +739,6 @@ class PolygonItem(QGraphicsItem):
 
         prev_is_bezier = getattr(prev_edge, 'type', None) == EdgeType.BEZIER
         next_is_bezier = getattr(next_edge, 'type', None) == EdgeType.BEZIER
-
-        import math
 
         # Case A: both Bezier (existing behavior)
         if prev_is_bezier and next_is_bezier:
@@ -963,16 +864,10 @@ class PolygonItem(QGraphicsItem):
     # Metoda wywoływana przez on_control_moved w BezierEdgeItem. Modyfikuje 
     # wierzchołek sąsiadujący z wierzchołkiem vertex po przesunięciu punktu
     # kontrolnego krzywej beziera związanego z wierzchołkiem vertex, tak aby zachować ciągłość
-    # przypisaną do wierzchołka vertex (modyfikujemy tylko pozycję wierzchołka 
-    # sąsiadującego z vertex, z którym tworzy zwykłą krawędź)
+    # do niego przypisaną (modyfikujemy tylko pozycję wierzchołka sąsiadującego
+    # z wierzchołkiem vertex, z którym tworzy on zwykłą krawędź)
     def enforce_vertex_continuity_from_control(self, vertex: Vertex, moved_control: str | None = None):
-        """Called when a bezier control handle adjacent to `vertex` moved.
-        moved_control: 'prev' if the handle on the incoming edge (c2) moved,
-                       'next' if the handle on the outgoing edge (c1) moved.
-        Adjusts neighbouring geometry while keeping continuity and honoring
-        any constraint on the adjacent straight edge. The moved handle stays
-        as the driver and the opposite side is adjusted to satisfy continuity."""
-        prev_edge, prev_idx, next_edge, next_idx = self._adjacent_edges_of_vertex(vertex)
+        prev_edge, prev_idx, next_edge, next_idx = self.adjacent_edges_of_vertex(vertex)
         if prev_edge is None or next_edge is None:
             return
 
@@ -983,8 +878,8 @@ class PolygonItem(QGraphicsItem):
         vx = vertex.x
         vy = vertex.y
 
-        prev_is_bezier = getattr(prev_edge, 'type', None) == EdgeType.BEZIER
-        next_is_bezier = getattr(next_edge, 'type', None) == EdgeType.BEZIER
+        prev_is_bezier = prev_edge.type == EdgeType.BEZIER
+        next_is_bezier = next_edge.type == EdgeType.BEZIER
 
         moved_vertices = []
 
@@ -1075,9 +970,9 @@ class PolygonItem(QGraphicsItem):
                     constraint_val,
                 )
             else:
-                dir_unit, _ = self._normalize_vector((pvx, pvy))
+                dir_unit, _ = normalize_vector((pvx, pvy))
                 if dir_unit is None:
-                    dir_unit, base_len = self._normalize_vector((other.x - vx, other.y - vy))
+                    dir_unit, base_len = normalize_vector((other.x - vx, other.y - vy))
                 else:
                     base_len = math.hypot(other.x - vx, other.y - vy)
                 if dir_unit is None:
@@ -1134,9 +1029,9 @@ class PolygonItem(QGraphicsItem):
                     constraint_val,
                 )
             else:
-                dir_unit, _ = self._normalize_vector(desired_dir)
+                dir_unit, _ = normalize_vector(desired_dir)
                 if dir_unit is None:
-                    dir_unit, base_len = self._normalize_vector((other.x - vx, other.y - vy))
+                    dir_unit, base_len = normalize_vector((other.x - vx, other.y - vy))
                 else:
                     base_len = math.hypot(other.x - vx, other.y - vy)
                 if dir_unit is None:
@@ -1247,6 +1142,17 @@ class PolygonItem(QGraphicsItem):
             # Sync edges dict and rebuild view based on the new model
             self._sync_edges_dict()
             self._rebuild_childitems()
+        else:
+            # Show a short info when trying to remove a vertex from a triangle
+            try:
+                QMessageBox.warning(
+                    None,
+                    "Removing Vertex",
+                    "You cannot delete a vertex — a polygon must have at least 3 vertices.",
+                )
+            except Exception:
+                # In non-GUI or testing contexts, just ignore the message box
+                pass
 
     def apply_constraint_to_edge(self, edge: Edge, constraint_type: ConstraintType, value=None) -> bool:
         idx = self.polygon.edges.index(edge)
@@ -1276,13 +1182,27 @@ class PolygonItem(QGraphicsItem):
         if constraint_type == ConstraintType.VERTICAL:
             moving.x = other.x
         elif constraint_type == ConstraintType.DIAGONAL_45:
+            # Set direction to nearest 45° and preserve current Euclidean length
             dx = moving.x - other.x
             dy = moving.y - other.y
-            sx = 1 if dx >= 0 else -1
-            sy = 1 if dy >= 0 else -1
-            mag = max(abs(dx), abs(dy))
-            moving.x = other.x + sx * mag
-            moving.y = other.y + sy * mag
+            dist = math.hypot(dx, dy)
+            if dist < 1e-8:
+                sx = 1 if dx >= 0 else -1
+                sy = 1 if dy >= 0 else -1
+                inv_sqrt2 = 1.0 / math.sqrt(2.0)
+                ux = sx * inv_sqrt2
+                uy = sy * inv_sqrt2
+                step = 1.0
+                moving.x = other.x + ux * step
+                moving.y = other.y + uy * step
+            else:
+                sx = 1 if dx >= 0 else -1
+                sy = 1 if dy >= 0 else -1
+                inv_sqrt2 = 1.0 / math.sqrt(2.0)
+                ux = sx * inv_sqrt2
+                uy = sy * inv_sqrt2
+                moving.x = other.x + ux * dist
+                moving.y = other.y + uy * dist
         elif constraint_type == ConstraintType.FIXED_LENGTH:
             L = value
             if L is None:
@@ -1307,7 +1227,7 @@ class PolygonItem(QGraphicsItem):
     # Method called by MainWindow when line drawing mode is changed
     def redraw_with_new_mode(self, mode: LineDrawingMode):
         # Update line drawing mode
-        self.line_drawing_mode = mode
+        self._line_drawing_mode = mode
 
         # Remove old edge items
         for e_item in self.edge_items:
@@ -1325,3 +1245,39 @@ class PolygonItem(QGraphicsItem):
             e_item.update_edge()
 
         self.update()
+
+    def _enforce_all_constraints_and_continuity(self):
+        # Sync map for robustness
+        self._sync_edges_dict()
+
+        # 1) Enforce constraints edge-by-edge (no propagation needed here)
+        for e in list(self.polygon.edges):
+            if getattr(e, 'constraint_type', ConstraintType.NONE) != ConstraintType.NONE:
+                try:
+                    self._enforce_edge_constraint(e.v1, e.v2)
+                except Exception:
+                    continue
+
+        # 2) Enforce continuity at vertices that request it
+        for v in list(self.polygon.vertices):
+            cont = getattr(v, 'continuity', None)
+            if cont is not None and cont != ContinuityType.G0:
+                try:
+                    self.enforce_vertex_continuity_from_vertex(v)
+                except Exception:
+                    continue
+
+        # 3) Refresh visuals: positions and edges
+        self.updating_from_parent = True
+        try:
+            for v, v_item in self.vertex_items.items():
+                vertex_parent_coords = self.mapFromScene(QPointF(v.x, v.y))
+                v_item.setPos(vertex_parent_coords)
+            for e_item in self.edge_items:
+                e_item.update_edge()
+        finally:
+            self.updating_from_parent = False
+        try:
+            self.update()
+        except Exception:
+            pass
