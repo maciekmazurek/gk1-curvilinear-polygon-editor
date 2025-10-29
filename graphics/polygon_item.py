@@ -1107,6 +1107,7 @@ class PolygonItem(QGraphicsItem):
         # rebuild view based on the new model
         self._sync_edges_dict()
         self._rebuild_childitems()
+        self._enforce_all_constraints_and_continuity()
 
     # Method called by VertexItem when user wants to delete it
     def delete_vertex(self, vertex: Vertex):
@@ -1142,6 +1143,7 @@ class PolygonItem(QGraphicsItem):
             # Sync edges dict and rebuild view based on the new model
             self._sync_edges_dict()
             self._rebuild_childitems()
+            self._enforce_all_constraints_and_continuity()
         else:
             # Show a short info when trying to remove a vertex from a triangle
             try:
