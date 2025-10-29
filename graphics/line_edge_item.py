@@ -75,9 +75,9 @@ class LineEdgeItem(EdgeItem):
             elif chosen_action == clear_constraint_action:
                 parent.apply_constraint_to_edge(self.edge, ConstraintType.NONE, None)
             elif chosen_action == to_bezier_action:
-                parent.convert_edge_to_bezier(self.edge)
+                parent.convert_edge(self.edge, EdgeType.BEZIER)
             elif chosen_action == to_arc_action:
-                parent.convert_edge_to_arc(self.edge)
+                parent.convert_edge(self.edge, EdgeType.ARC)
         event.accept()
 
     def _draw_constraint_icon(self, painter):

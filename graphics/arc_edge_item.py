@@ -56,7 +56,7 @@ class ArcEdgeItem(EdgeItem):
         if chosen == to_line_action:
             parent = self.parentItem()
             if parent:
-                parent.convert_edge_to_line(self.edge)
+                parent.convert_edge(self.edge, EdgeType.LINE)
         event.accept()
 
     def convert_coords_to_parent(self):
